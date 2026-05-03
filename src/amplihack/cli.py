@@ -761,6 +761,15 @@ For comprehensive auto mode documentation, see docs/AUTO_MODE.md""",
     )
     show_parser.add_argument("--no-steps", action="store_true", help="Hide step details")
     show_parser.add_argument("--no-context", action="store_true", help="Hide context variables")
+    # Resolve bundle asset command
+    resolve_asset_parser = subparsers.add_parser(
+        "resolve-bundle-asset", help="Resolve named amplihack bundle asset paths"
+    )
+    resolve_asset_parser.add_argument(
+        "asset_name",
+        help="Named asset to resolve (e.g. helper-path, hooks-dir, session-tree-path, multitask-orchestrator)",
+    )
+
     # Mode detection commands
     mode_parser = subparsers.add_parser("mode", help="Claude installation mode commands")
     mode_subparsers = mode_parser.add_subparsers(dest="mode_command", help="Mode subcommands")
@@ -1880,6 +1889,10 @@ def main(argv: list[str] | None = None) -> int:
 
         create_parser().print_help()
         return 1
+    elif args.command == "resolve-bundle-asset":
+        from .runtime_assets import main as runtime_assets_main
+
+        return runtime_assets_main([args.asset_name])
     elif args.command == "mode":
         from .mode_detector import MigrationHelper, ModeDetector
 
