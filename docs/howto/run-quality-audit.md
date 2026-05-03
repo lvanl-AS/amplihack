@@ -113,6 +113,51 @@ result = run_recipe_by_name(
 )
 ```
 
+## Requiring Stronger Validation Agreement
+
+Set `validation_threshold` when the audit should only fix findings that receive
+more validator agreement. The default is `2`, which means two of the three
+validator agents must confirm or downgrade the same finding before it is sent to
+the fix step.
+
+```python
+result = run_recipe_by_name(
+    "quality-audit-cycle",
+    user_context={
+        "target_path": "src/amplihack/recipes",
+        "repo_path": ".",
+        "validation_threshold": "3",
+        "severity_threshold": "medium",
+    },
+    progress=True,
+)
+```
+
+Use `3` for high-risk targets where fixes should require unanimous validator
+agreement. Use the default `2` for normal quality-audit cycles.
+
+## Using Merged Validation Results
+
+The recipe's `merge-validations` step stores merged validator output in the
+`validated_findings` context variable. That value is parsed JSON, so downstream
+recipe conditions can use object-style access instead of parsing a JSON string:
+
+```yaml
+condition: "validated_findings and validated_findings['confirmed_count'] > 0"
+```
+
+The object includes:
+
+| Field                  | Meaning                                          |
+| ---------------------- | ------------------------------------------------ |
+| `validated`            | Merged verdicts for findings that received votes |
+| `confirmed_count`      | Findings that met `validation_threshold`         |
+| `false_positive_count` | Findings rejected by validator consensus         |
+| `false_positive_rate`  | Rejected findings as an integer percentage       |
+
+Confirmed findings move to the `fix` step. False positives remain in the audit
+history but are skipped by fix execution.
+
 ## Troubleshooting
 
 ### "target path does not exist"

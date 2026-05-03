@@ -54,6 +54,141 @@ Cycle 3+: seek(deepest) → validate(×3) → merge → fix → verify → accum
   emerged in the current cycle.
 - **Stop** at `max_cycles` unconditionally.
 
+## Validation Merge Contract
+
+The `merge-validations` step is the boundary between validator agents and fix
+execution. It deterministically combines `validation_agent_1`,
+`validation_agent_2`, and `validation_agent_3`, writes one JSON object to
+stdout, and stores that object in context as `validated_findings`.
+
+Because the step declares `parse_json: true`, recipe consumers receive
+`validated_findings` as a parsed object, not as a JSON string. Conditions and
+later steps should access fields directly:
+
+```yaml
+- id: "fix"
+  agent: "amplihack:specialized:fix-agent"
+  condition: "validated_findings and validated_findings['confirmed_count'] > 0"
+  prompt: |
+    Confirmed validation results:
+    {{validated_findings}}
+```
+
+Do not write conditions that parse `validated_findings` as text or search for
+JSON fragments. The recipe runner has already parsed the merge output.
+
+### `validated_findings` schema
+
+| Field                  | Type   | Description                                              |
+| ---------------------- | ------ | -------------------------------------------------------- |
+| `cycle`                | int    | Audit cycle number that produced the validation results  |
+| `validated`            | list   | One merged verdict per finding that received votes       |
+| `confirmed_count`      | int    | Number of findings confirmed by the configured threshold |
+| `false_positive_count` | int    | Number of findings rejected by the configured threshold  |
+| `false_positive_rate`  | string | Integer percentage string, for example `"33%"`           |
+
+Each item in `validated` has this shape:
+
+| Field            | Type   | Description                                                    |
+| ---------------- | ------ | -------------------------------------------------------------- |
+| `finding_id`     | int    | Finding identifier from the SEEK output                        |
+| `verdict`        | string | `"confirmed"` or `"false_positive"`                            |
+| `final_severity` | string | Lowest agreed severity for confirmed findings, or `"n/a"`      |
+| `votes`          | dict   | Counts for `confirmed` and `false_positive` validator verdicts |
+| `reasoning`      | string | Concatenated validator reasoning used for the merged verdict   |
+
+Example value:
+
+```json
+{
+  "cycle": 2,
+  "validated": [
+    {
+      "finding_id": 7,
+      "verdict": "confirmed",
+      "final_severity": "high",
+      "votes": { "confirmed": 2, "false_positive": 1 },
+      "reasoning": "Missing timeout on subprocess call; caller can hang indefinitely"
+    },
+    {
+      "finding_id": 8,
+      "verdict": "false_positive",
+      "final_severity": "n/a",
+      "votes": { "confirmed": 1, "false_positive": 2 },
+      "reasoning": "The default is logged and returned through an explicit degraded status"
+    }
+  ],
+  "confirmed_count": 1,
+  "false_positive_count": 1,
+  "false_positive_rate": "50%"
+}
+```
+
+### Validation threshold
+
+`validation_threshold` controls how many validators must confirm a finding.
+The default is `2`, so a finding is confirmed when at least two of the three
+validators return `verdict: "confirmed"` or `verdict: "downgraded"` for the
+same `finding_id`.
+
+Lowering the threshold makes the recipe more aggressive and sends more
+findings to the fix step. Raising it to `3` requires unanimous agreement before
+fix execution.
+
+```python
+from amplihack.recipes import run_recipe_by_name
+
+result = run_recipe_by_name(
+    "quality-audit-cycle",
+    user_context={
+        "target_path": "src/amplihack/recipes",
+        "repo_path": ".",
+        "validation_threshold": "3",
+    },
+    progress=True,
+)
+```
+
+### Downstream step example
+
+Use object-style access when a later recipe step needs to branch on validation
+results:
+
+```yaml
+- id: "report-confirmed-validation-count"
+  type: "bash"
+  condition: "validated_findings and validated_findings['confirmed_count'] > 0"
+  command: |
+    python3 - <<'PYEOF'
+    print("confirmed findings are available for fix execution")
+    PYEOF
+```
+
+Use a quoted heredoc when the step needs the full JSON value in bash:
+
+```yaml
+- id: "summarize-validation-results"
+  type: "bash"
+  condition: "validated_findings"
+  command: |
+    _VALIDATED_TMPFILE=$(mktemp)
+    trap 'rm -f "$_VALIDATED_TMPFILE"' EXIT
+    cat > "$_VALIDATED_TMPFILE" <<'__VALIDATED_EOF__'
+    {{validated_findings}}
+    __VALIDATED_EOF__
+    export VALIDATED_FILE="$_VALIDATED_TMPFILE"
+
+    python3 - <<'PYEOF'
+    import os
+    from amplihack.utils.defensive import parse_llm_json
+
+    with open(os.environ["VALIDATED_FILE"]) as f:
+        data = parse_llm_json(f.read())
+
+    print(data["confirmed_count"])
+    PYEOF
+```
+
 ## Bash Step Safety
 
 ### The Problem
