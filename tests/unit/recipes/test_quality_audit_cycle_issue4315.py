@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+
 from amplihack.recipes.models import Step, StepType
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
