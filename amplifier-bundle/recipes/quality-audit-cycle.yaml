@@ -339,22 +339,33 @@ steps:
       threshold = int(os.environ.get('THRESHOLD', '2'))
       cycle = os.environ.get('CYCLE', '1')
 
-      def load_validator(path):
+      def fail_validator(label, message):
+          print(f"merge-validations: {label} {message}", file=sys.stderr)
+          raise SystemExit(2)
+
+      def validate_validator_payload(data, label):
+          if not isinstance(data, dict) or not isinstance(data.get('validated'), list):
+              fail_validator(label, "payload must be an object with a validated list")
+          return {'validated': data['validated']}
+
+      def load_validator(path, label):
           try:
               with open(path) as f:
-                  data = parse_llm_json(f.read())
-              if isinstance(data, dict):
-                  return data
-              print(f"load_validator: parsed non-dict payload from {path}: {type(data).__name__}", file=sys.stderr)
+                  raw = f.read()
+          except FileNotFoundError:
+              fail_validator(label, "output is not valid JSON")
+          if not raw.strip():
               return {'validated': []}
-          except (JSONExtractionError, FileNotFoundError) as e:
-              print(f"load_validator: failed to parse {path}: {e}", file=sys.stderr)
-              return {'validated': []}
+          try:
+              data = parse_llm_json(raw)
+          except JSONExtractionError:
+              fail_validator(label, "output is not valid JSON")
+          return validate_validator_payload(data, label)
 
       validators = [
-          load_validator(os.environ['V1_FILE']),
-          load_validator(os.environ['V2_FILE']),
-          load_validator(os.environ['V3_FILE']),
+          load_validator(os.environ['V1_FILE'], "validator agent 1"),
+          load_validator(os.environ['V2_FILE'], "validator agent 2"),
+          load_validator(os.environ['V3_FILE'], "validator agent 3"),
       ]
 
       # Collect votes per finding_id

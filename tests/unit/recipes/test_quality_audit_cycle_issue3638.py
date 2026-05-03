@@ -16,15 +16,16 @@ References: #3638, #3046 (heredoc safety), #3002 (working_dir forwarding)
 
 from __future__ import annotations
 
-import re
 import json
 import os
+import re
 import subprocess
 import textwrap
 from pathlib import Path
 
 import pytest
 import yaml
+
 from amplihack.recipes.models import Step, StepType
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -440,14 +441,13 @@ class TestBug4NoisyJsonParsing:
             {"validator":"agent-2","cycle":1,"validated":[{"finding_id":1,"verdict":"confirmed","new_severity":"medium","reasoning":"same issue confirmed"}],"confirmed_count":1,"false_positive_count":0}
             """
         )
-        architect_payload = "No JSON here on purpose."
         result = self._run_bash(
             self._render_templates(
                 merge_step["command"],
                 {
                     "validation_agent_1": validator_payload,
                     "validation_agent_2": reviewer_payload,
-                    "validation_agent_3": architect_payload,
+                    "validation_agent_3": "   \n",
                     "validation_threshold": "2",
                     "cycle_number": "1",
                 },
@@ -462,6 +462,49 @@ class TestBug4NoisyJsonParsing:
         assert merged["confirmed_count"] == 1
         fix_condition = Step(id="fix", step_type=StepType.AGENT, condition=fix_step["condition"])
         assert fix_condition.evaluate_condition({"validated_findings": merged})
+
+    @pytest.mark.parametrize(
+        ("bad_output", "message_fragment"),
+        [
+            (
+                "I reviewed this and it looks confirmed, but I forgot to include JSON.",
+                "output is not valid JSON",
+            ),
+            (
+                'The finding is valid.\n```json\n{ "validated": [\n```\n',
+                "output is not valid JSON",
+            ),
+            (
+                '[{"finding_id": 1, "verdict": "confirmed"}]',
+                "payload must be an object with a validated list",
+            ),
+            (
+                '{"validated": {"finding_id": 1, "verdict": "confirmed"}}',
+                "payload must be an object with a validated list",
+            ),
+        ],
+    )
+    def test_merge_validations_rejects_malformed_non_empty_validator_output(
+        self, recipe, tmp_path, bad_output, message_fragment
+    ):
+        merge_step = self._step(recipe, "merge-validations")
+        result = self._run_bash(
+            self._render_templates(
+                merge_step["command"],
+                {
+                    "validation_agent_1": bad_output,
+                    "validation_agent_2": "",
+                    "validation_agent_3": "",
+                    "validation_threshold": "2",
+                    "cycle_number": "1",
+                },
+            ),
+            tmp_path,
+        )
+        assert result.returncode != 0
+        assert result.stdout == ""
+        assert "merge-validations: validator agent 1" in result.stderr
+        assert message_fragment in result.stderr
 
     def test_verify_fixes_parses_noisy_fix_agent_output(self, recipe, tmp_path):
         verify_step = self._step(recipe, "verify-fixes")

@@ -192,13 +192,19 @@ Cycle 3: SEEK (deepest) → VALIDATE → FIX → decision
 
 **Run via recipe:**
 
-```bash
-amplihack recipe run amplifier-bundle/recipes/quality-audit-cycle.yaml \
-  -c target_path=src/amplihack \
-  -c repo_path="." \
-  -c min_cycles=3 \
-  -c max_cycles=6 \
-  --verbose
+```python
+from amplihack.recipes import run_recipe_by_name
+
+result = run_recipe_by_name(
+    "quality-audit-cycle",
+    user_context={
+        "target_path": "src/amplihack",
+        "repo_path": ".",
+        "min_cycles": "3",
+        "max_cycles": "6",
+    },
+    progress=True,
+)
 ```
 
 ## Configuration
@@ -226,17 +232,23 @@ Override defaults via recipe context or environment:
 
 **Example invocation**:
 
-```bash
-amplihack recipe run amplifier-bundle/recipes/quality-audit-cycle.yaml \
-  -c target_path=crates/amplihack-fleet/src \
-  -c repo_path="." \
-  -c min_cycles=3 \
-  -c max_cycles=6 \
-  -c severity_threshold=medium \
-  -c module_loc_limit=300 \
-  -c fix_all_per_cycle=true \
-  -c categories="security,reliability,dead_code,silent_fallbacks,error_swallowing" \
-  --verbose
+```python
+from amplihack.recipes import run_recipe_by_name
+
+result = run_recipe_by_name(
+    "quality-audit-cycle",
+    user_context={
+        "target_path": "src/amplihack/fleet",
+        "repo_path": ".",
+        "min_cycles": "3",
+        "max_cycles": "6",
+        "severity_threshold": "medium",
+        "module_loc_limit": "300",
+        "fix_all_per_cycle": "true",
+        "categories": "security,reliability,dead_code,silent_fallbacks,error_swallowing",
+    },
+    progress=True,
+)
 ```
 
 **Core Settings (environment)**:
