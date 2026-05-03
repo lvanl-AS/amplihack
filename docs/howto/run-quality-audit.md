@@ -148,12 +148,12 @@ condition: "validated_findings and validated_findings['confirmed_count'] > 0"
 
 The object includes:
 
-| Field                  | Meaning                                          |
-| ---------------------- | ------------------------------------------------ |
-| `validated`            | Merged verdicts for findings that received votes |
-| `confirmed_count`      | Findings that met `validation_threshold`         |
-| `false_positive_count` | Findings rejected by validator consensus         |
-| `false_positive_rate`  | Rejected findings as an integer percentage       |
+| Field                  | Meaning                                                                   |
+| ---------------------- | ------------------------------------------------------------------------- |
+| `validated`            | Merged verdicts for findings that received votes                          |
+| `confirmed_count`      | Findings that met `validation_threshold`                                  |
+| `false_positive_count` | Findings that did not meet the confirmation threshold                     |
+| `false_positive_rate`  | Findings that did not meet the threshold, as an integer percentage string |
 
 Confirmed findings move to the `fix` step. False positives remain in the audit
 history but are skipped by fix execution.

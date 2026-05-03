@@ -79,13 +79,13 @@ JSON fragments. The recipe runner has already parsed the merge output.
 
 ### `validated_findings` schema
 
-| Field                  | Type   | Description                                              |
-| ---------------------- | ------ | -------------------------------------------------------- |
-| `cycle`                | int    | Audit cycle number that produced the validation results  |
-| `validated`            | list   | One merged verdict per finding that received votes       |
-| `confirmed_count`      | int    | Number of findings confirmed by the configured threshold |
-| `false_positive_count` | int    | Number of findings rejected by the configured threshold  |
-| `false_positive_rate`  | string | Integer percentage string, for example `"33%"`           |
+| Field                  | Type   | Description                                                     |
+| ---------------------- | ------ | --------------------------------------------------------------- |
+| `cycle`                | int    | Audit cycle number that produced the validation results         |
+| `validated`            | list   | One merged verdict per finding that received votes              |
+| `confirmed_count`      | int    | Number of findings confirmed by the configured threshold        |
+| `false_positive_count` | int    | Number of findings that did not meet the confirmation threshold |
+| `false_positive_rate`  | string | Integer percentage string, for example `"33%"`                  |
 
 Each item in `validated` has this shape:
 
@@ -267,10 +267,12 @@ For simpler steps that only need one variable:
     cat > "$_TMPFILE" <<'__EOF__'
     {{validated_findings}}
     __EOF__
+    export VALIDATED_FILE="$_TMPFILE"
 
     python3 - <<'PYEOF'
+    import os
     from amplihack.utils.defensive import parse_llm_json
-    with open("'$_TMPFILE'") as f:
+    with open(os.environ["VALIDATED_FILE"]) as f:
         data = parse_llm_json(f.read())
     PYEOF
 ```
