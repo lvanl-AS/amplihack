@@ -385,6 +385,7 @@ class TestBug4NoisyJsonParsing:
 
     def _render_templates(self, text: str, values: dict[str, str]) -> str:
         rendered = text
+        values = {"python_bin": "python3", **values}
         for key, value in values.items():
             rendered = rendered.replace(f"{{{{{key}}}}}", value)
         return rendered

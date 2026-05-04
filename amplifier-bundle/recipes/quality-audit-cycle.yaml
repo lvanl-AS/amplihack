@@ -31,6 +31,7 @@ context:
   module_loc_limit: "300"
   fix_all_per_cycle: "true"
   categories: "security,reliability,dead_code,silent_fallbacks,error_swallowing,structural,hardcoded_limits,test_gaps,doc_gaps,documentation"
+  python_bin: "python3"
 
   # Output directory
   output_dir: "./eval_results/quality_audit"
@@ -331,7 +332,7 @@ steps:
       export THRESHOLD="{{validation_threshold}}"
       export CYCLE="{{cycle_number}}"
 
-      python3 - <<'PYEOF'
+      "{{python_bin}}" - <<'PYEOF'
       import json, os, sys
       from amplihack.utils.defensive import JSONExtractionError, parse_llm_json
 
@@ -539,7 +540,7 @@ steps:
       export VALIDATED_FILE="$_VALIDATED_TMPFILE"
       export FIX_RESULTS_FILE="$_FIX_RESULTS_TMPFILE"
 
-      python3 - <<'PYEOF'
+      "{{python_bin}}" - <<'PYEOF'
       import json, os, sys
       from amplihack.utils.defensive import JSONExtractionError, parse_llm_json
 
@@ -684,8 +685,8 @@ steps:
       # The decision should be: did this cycle find new issues? If yes, continue.
       # NOT: are there old unfixed issues remaining?
       export VALIDATED_FILE="$_VALIDATED_TMPFILE"
-      read -r HIGH_COUNT CRITICAL_COUNT MEDIUM_COUNT CONFIRMED <<< $(python3 -c "
-      import os
+      read -r HIGH_COUNT CRITICAL_COUNT MEDIUM_COUNT CONFIRMED <<< $("{{python_bin}}" -c "
+      import os, sys
       from amplihack.utils.defensive import JSONExtractionError, parse_llm_json
       try:
           with open(os.environ['VALIDATED_FILE']) as f:
@@ -757,7 +758,7 @@ steps:
       export CATEGORIES="{{categories}}"
       export OUTPUT_DIR="{{output_dir}}"
 
-      python3 - <<'PY'
+      "{{python_bin}}" - <<'PY'
       import json
       import os
       from pathlib import Path
@@ -781,6 +782,7 @@ steps:
               "fix_all_per_cycle": os.environ["FIX_ALL_PER_CYCLE"],
               "categories": os.environ["CATEGORIES"],
               "output_dir": os.environ["OUTPUT_DIR"],
+              "python_bin": "{{python_bin}}",
               "cycle_number": next_cycle,
               "cycle_history": history,
           },
@@ -909,7 +911,7 @@ steps:
       export FINAL_DECISION="{{recurse_decision}}"
       export FINAL_TARGET="{{target_path}}"
 
-      python3 - <<'PY'
+      "{{python_bin}}" - <<'PY'
       import json
       import os
       from pathlib import Path
