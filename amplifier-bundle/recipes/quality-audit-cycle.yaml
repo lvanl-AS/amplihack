@@ -334,7 +334,7 @@ steps:
       export CYCLE="{{cycle_number}}"
 
       "{{python_bin}}" - <<'PYEOF'
-      import json, os, sys
+      import json, os, re, sys
       from amplihack.utils.defensive import JSONExtractionError, parse_llm_json
 
       SEVERITY_ORDER = {'low': 0, 'medium': 1, 'high': 2, 'critical': 3}
@@ -397,6 +397,56 @@ steps:
               fail_validator(label, "payload must be an object with a validated list")
           return {'validated': [item for item in (normalize_validation_item(v) for v in raw_items) if item]}
 
+      def is_validator_payload(data):
+          return isinstance(data, dict) and (
+              isinstance(data.get('validated'), list)
+              or isinstance(data.get('validations'), list)
+          )
+
+      def candidate_json_objects(raw):
+          code_block_pattern = r"```(?:json)?\s*\n(.*?)\n```"
+          for match in re.findall(code_block_pattern, raw, re.DOTALL):
+              yield match.strip()
+
+          starts = [idx for idx, char in enumerate(raw) if char == '{']
+          for start_idx in starts:
+              depth = 0
+              in_string = False
+              escape = False
+              for idx in range(start_idx, len(raw)):
+                  char = raw[idx]
+                  if escape:
+                      escape = False
+                      continue
+                  if char == '\\':
+                      escape = True
+                      continue
+                  if char == '"':
+                      in_string = not in_string
+                      continue
+                  if in_string:
+                      continue
+                  if char == '{':
+                      depth += 1
+                  elif char == '}':
+                      depth -= 1
+                      if depth == 0:
+                          yield raw[start_idx:idx + 1]
+                          break
+
+      def parse_validator_json(raw, label):
+          valid_payloads = []
+          for candidate in candidate_json_objects(raw):
+              try:
+                  data = json.loads(candidate)
+              except json.JSONDecodeError:
+                  continue
+              if is_validator_payload(data):
+                  valid_payloads.append(data)
+          if valid_payloads:
+              return valid_payloads[-1]
+          return parse_llm_json(raw)
+
       def load_validator(path, label):
           try:
               with open(path) as f:
@@ -406,7 +456,7 @@ steps:
           if not raw.strip():
               return {'validated': [], '_valid_output': False}
           try:
-              data = parse_llm_json(raw)
+              data = parse_validator_json(raw, label)
           except JSONExtractionError:
               warn_validator(label, "output is not valid JSON")
               return {'validated': [], '_valid_output': False, '_invalid_reason': 'output is not valid JSON'}

@@ -551,6 +551,62 @@ class TestBug4NoisyJsonParsing:
         assert by_id["completion-provider-untested"]["final_severity"] == "medium"
         assert by_id["project-xml-rename-missing"]["verdict"] == "false_positive"
 
+    def test_merge_validations_uses_last_validator_shaped_json_object(self, recipe, tmp_path):
+        merge_step = self._step(recipe, "merge-validations")
+        noisy_validator_output = textwrap.dedent(
+            """\
+            I inspected the findings and some tool output first.
+
+            ```json
+            {
+              "findings": [
+                {"id": 99, "description": "not a validator payload"}
+              ],
+              "summary": {"total": 1}
+            }
+            ```
+
+            The final validator result is:
+
+            ```json
+            {
+              "validator": "agent-1",
+              "cycle": 1,
+              "validated": [
+                {
+                  "finding_id": 1,
+                  "verdict": "confirmed",
+                  "new_severity": "medium",
+                  "reasoning": "final validator-shaped payload"
+                }
+              ],
+              "confirmed_count": 1,
+              "false_positive_count": 0
+            }
+            ```
+            """
+        )
+        result = self._run_bash(
+            self._render_templates(
+                merge_step["command"],
+                {
+                    "validation_agent_1": noisy_validator_output,
+                    "validation_agent_2": noisy_validator_output,
+                    "validation_agent_3": "",
+                    "validation_threshold": "2",
+                    "cycle_number": "1",
+                },
+            ),
+            tmp_path,
+        )
+        assert result.returncode == 0, (
+            "merge-validations should choose the final validator-shaped JSON payload.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        merged = json.loads(result.stdout)
+        assert merged["confirmed_count"] == 1
+        assert merged["validated"][0]["finding_id"] == 1
+
     @pytest.mark.parametrize(
         ("bad_output", "message_fragment"),
         [
