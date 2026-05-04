@@ -345,6 +345,9 @@ steps:
           print(f"merge-validations: {label} {message}", file=sys.stderr)
           raise SystemExit(2)
 
+      def warn_validator(label, message):
+          print(f"merge-validations: {label} {message}; treating as abstention", file=sys.stderr)
+
       def validate_validator_payload(data, label):
           if not isinstance(data, dict) or not isinstance(data.get('validated'), list):
               fail_validator(label, "payload must be an object with a validated list")
@@ -355,20 +358,38 @@ steps:
               with open(path) as f:
                   raw = f.read()
           except FileNotFoundError:
-              fail_validator(label, "output is not valid JSON")
+              return {'validated': [], '_valid_output': False, '_invalid_reason': 'output file missing'}
           if not raw.strip():
-              return {'validated': []}
+              return {'validated': [], '_valid_output': False}
           try:
               data = parse_llm_json(raw)
           except JSONExtractionError:
-              fail_validator(label, "output is not valid JSON")
-          return validate_validator_payload(data, label)
+              warn_validator(label, "output is not valid JSON")
+              return {'validated': [], '_valid_output': False, '_invalid_reason': 'output is not valid JSON'}
+          try:
+              payload = validate_validator_payload(data, label)
+          except SystemExit:
+              warn_validator(label, "payload must be an object with a validated list")
+              return {'validated': [], '_valid_output': False, '_invalid_reason': 'payload must be an object with a validated list'}
+          payload['_valid_output'] = True
+          return payload
 
       validators = [
           load_validator(os.environ['V1_FILE'], "validator agent 1"),
           load_validator(os.environ['V2_FILE'], "validator agent 2"),
           load_validator(os.environ['V3_FILE'], "validator agent 3"),
       ]
+      valid_output_count = sum(1 for v in validators if v.get('_valid_output'))
+      invalid_validators = [
+          {'validator': i + 1, 'reason': v.get('_invalid_reason', 'empty output')}
+          for i, v in enumerate(validators)
+          if not v.get('_valid_output') and v.get('_invalid_reason')
+      ]
+      if invalid_validators and valid_output_count < threshold:
+          fail_validator(
+              "validator quorum",
+              f"has only {valid_output_count} valid validator outputs; threshold is {threshold}"
+          )
 
       # Collect votes per finding_id
       votes = {}
@@ -422,6 +443,8 @@ steps:
           'confirmed_count': confirmed_count,
           'false_positive_count': fp_count,
           'false_positive_rate': f'{fp_count * 100 // max(total, 1)}%',
+          'valid_validator_outputs': valid_output_count,
+          'invalid_validators': invalid_validators,
       }
       print(json.dumps(result, indent=2))
       PYEOF

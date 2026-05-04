@@ -464,6 +464,41 @@ class TestBug4NoisyJsonParsing:
         fix_condition = Step(id="fix", step_type=StepType.AGENT, condition=fix_step["condition"])
         assert fix_condition.evaluate_condition({"validated_findings": merged})
 
+    def test_merge_validations_treats_single_malformed_validator_as_abstention(
+        self, recipe, tmp_path
+    ):
+        merge_step = self._step(recipe, "merge-validations")
+        valid_payload = (
+            '{"validated":[{"finding_id":1,"verdict":"confirmed",'
+            '"new_severity":"medium","reasoning":"confirmed"}]}'
+        )
+        result = self._run_bash(
+            self._render_templates(
+                merge_step["command"],
+                {
+                    "validation_agent_1": valid_payload,
+                    "validation_agent_2": valid_payload,
+                    "validation_agent_3": (
+                        "I reviewed this and it looks confirmed, but I forgot to include JSON."
+                    ),
+                    "validation_threshold": "2",
+                    "cycle_number": "1",
+                },
+            ),
+            tmp_path,
+        )
+        assert result.returncode == 0, (
+            "one malformed validator should abstain when quorum remains.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "validator agent 3 output is not valid JSON; treating as abstention" in result.stderr
+        merged = json.loads(result.stdout)
+        assert merged["confirmed_count"] == 1
+        assert merged["valid_validator_outputs"] == 2
+        assert merged["invalid_validators"] == [
+            {"validator": 3, "reason": "output is not valid JSON"}
+        ]
+
     @pytest.mark.parametrize(
         ("bad_output", "message_fragment"),
         [
@@ -485,7 +520,7 @@ class TestBug4NoisyJsonParsing:
             ),
         ],
     )
-    def test_merge_validations_rejects_malformed_non_empty_validator_output(
+    def test_merge_validations_rejects_malformed_output_when_quorum_is_lost(
         self, recipe, tmp_path, bad_output, message_fragment
     ):
         merge_step = self._step(recipe, "merge-validations")
@@ -506,6 +541,9 @@ class TestBug4NoisyJsonParsing:
         assert result.stdout == ""
         assert "merge-validations: validator agent 1" in result.stderr
         assert message_fragment in result.stderr
+        assert (
+            "validator quorum has only 0 valid validator outputs; threshold is 2" in result.stderr
+        )
 
     def test_verify_fixes_parses_noisy_fix_agent_output(self, recipe, tmp_path):
         verify_step = self._step(recipe, "verify-fixes")
