@@ -32,6 +32,7 @@ context:
   fix_all_per_cycle: "true"
   categories: "security,reliability,dead_code,silent_fallbacks,error_swallowing,structural,hardcoded_limits,test_gaps,doc_gaps,documentation"
   python_bin: "python3"
+  quality_audit_recipe_dir: ""
 
   # Output directory
   output_dir: "./eval_results/quality_audit"
@@ -757,6 +758,7 @@ steps:
       export FIX_ALL_PER_CYCLE="{{fix_all_per_cycle}}"
       export CATEGORIES="{{categories}}"
       export OUTPUT_DIR="{{output_dir}}"
+      export QUALITY_AUDIT_RECIPE_DIR="{{quality_audit_recipe_dir}}"
 
       "{{python_bin}}" - <<'PY'
       import json
@@ -767,6 +769,8 @@ steps:
 
       history = Path(os.environ["HISTORY_FILE"]).read_text()
       next_cycle = os.environ["NEXT_CYCLE"]
+      recipe_dir = os.environ.get("QUALITY_AUDIT_RECIPE_DIR", "").strip()
+      recipe_dirs = [recipe_dir] if recipe_dir else None
 
       result = run_recipe_by_name(
           "quality-audit-cycle",
@@ -783,9 +787,11 @@ steps:
               "categories": os.environ["CATEGORIES"],
               "output_dir": os.environ["OUTPUT_DIR"],
               "python_bin": "{{python_bin}}",
+              "quality_audit_recipe_dir": recipe_dir,
               "cycle_number": next_cycle,
               "cycle_history": history,
           },
+          recipe_dirs=recipe_dirs,
           progress=True,
       )
 

@@ -677,6 +677,16 @@ class TestRecipeValidation:
                     f"Step '{step['id']}' output var '{output_var}' not declared in context section"
                 )
 
+    def test_recursive_cycle_preserves_recipe_dir_override(self, recipe):
+        """Recursive cycles must use the same recipe bundle as the parent run."""
+        context = recipe.get("context", {})
+        assert "quality_audit_recipe_dir" in context
+        recurse_step = next(s for s in recipe["steps"] if s["id"] == "run-recursive-cycle")
+        command = recurse_step["command"]
+        assert 'export QUALITY_AUDIT_RECIPE_DIR="{{quality_audit_recipe_dir}}"' in command
+        assert "recipe_dirs=recipe_dirs" in command
+        assert '"quality_audit_recipe_dir": recipe_dir' in command
+
 
 class TestRecurseNextCycleYamlValidity:
     """Regression: #3892 — run-recursive-cycle Python code must stay inside YAML block scalar."""
