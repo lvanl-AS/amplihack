@@ -348,10 +348,54 @@ steps:
       def warn_validator(label, message):
           print(f"merge-validations: {label} {message}; treating as abstention", file=sys.stderr)
 
+      def normalize_verdict(verdict):
+          normalized = str(verdict or '').strip().lower()
+          if normalized in ('confirmed', 'valid', 'valid_as_quality_issue'):
+              return 'confirmed'
+          if normalized == 'downgraded':
+              return 'downgraded'
+          if normalized in ('false_positive', 'invalid', 'invalid_as_functional_bug', 'not_valid'):
+              return 'false_positive'
+          return normalized or 'false_positive'
+
+      def normalize_reasoning(item):
+          parts = []
+          for key in ('reasoning', 'rationale'):
+              value = item.get(key)
+              if value:
+                  parts.append(str(value))
+          evidence = item.get('evidence')
+          if isinstance(evidence, list) and evidence:
+              parts.append('Evidence: ' + '; '.join(str(v) for v in evidence))
+          elif evidence:
+              parts.append('Evidence: ' + str(evidence))
+          return ' '.join(parts)
+
+      def normalize_validation_item(item):
+          if not isinstance(item, dict):
+              return None
+          finding_id = item.get('finding_id', item.get('id'))
+          if finding_id is None:
+              return None
+          severity = str(item.get('new_severity', item.get('severity', 'medium'))).strip().lower()
+          if severity not in SEVERITY_ORDER:
+              severity = 'medium'
+          return {
+              'finding_id': finding_id,
+              'verdict': normalize_verdict(item.get('verdict')),
+              'new_severity': severity,
+              'reasoning': normalize_reasoning(item),
+          }
+
       def validate_validator_payload(data, label):
-          if not isinstance(data, dict) or not isinstance(data.get('validated'), list):
+          if not isinstance(data, dict):
               fail_validator(label, "payload must be an object with a validated list")
-          return {'validated': data['validated']}
+          raw_items = data.get('validated')
+          if raw_items is None:
+              raw_items = data.get('validations')
+          if not isinstance(raw_items, list):
+              fail_validator(label, "payload must be an object with a validated list")
+          return {'validated': [item for item in (normalize_validation_item(v) for v in raw_items) if item]}
 
       def load_validator(path, label):
           try:
@@ -817,6 +861,28 @@ steps:
           recipe_dirs=recipe_dirs,
           progress=True,
       )
+      if not result.success:
+          failed_steps = [
+              {
+                  "step_id": step.step_id,
+                  "status": step.status.value,
+                  "error": step.error,
+              }
+              for step in result.step_results
+              if step.status.value == "failed"
+          ]
+          print(
+              json.dumps(
+                  {
+                      "error": "recursive quality-audit-cycle failed",
+                      "cycle_number": next_cycle,
+                      "target_path": os.environ["TARGET_PATH"],
+                      "failed_steps": failed_steps,
+                  }
+              ),
+              flush=True,
+          )
+          raise SystemExit(1)
 
       ctx = result.context if isinstance(result.context, dict) else {}
       final_report = ctx.get("final_report")

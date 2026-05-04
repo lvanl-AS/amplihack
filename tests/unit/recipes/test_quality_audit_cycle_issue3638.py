@@ -499,6 +499,58 @@ class TestBug4NoisyJsonParsing:
             {"validator": 3, "reason": "output is not valid JSON"}
         ]
 
+    def test_merge_validations_accepts_validator_synonym_payload_shape(self, recipe, tmp_path):
+        merge_step = self._step(recipe, "merge-validations")
+        synonym_payload = textwrap.dedent(
+            """\
+            {
+              "cycle": 2,
+              "validator": "agent-1",
+              "status": "completed_with_input_limitation",
+              "validations": [
+                {
+                  "id": "completion-provider-untested",
+                  "verdict": "VALID",
+                  "confidence": "high",
+                  "evidence": [
+                    "Alice3CompletionProvider has nontrivial behavior.",
+                    "No provider tests exercise createTask."
+                  ],
+                  "rationale": "This is a valid coverage gap."
+                },
+                {
+                  "id": "project-xml-rename-missing",
+                  "verdict": "INVALID_AS_FUNCTIONAL_BUG",
+                  "confidence": "high",
+                  "rationale": "Source contradicts the functional bug claim."
+                }
+              ]
+            }
+            """
+        )
+        result = self._run_bash(
+            self._render_templates(
+                merge_step["command"],
+                {
+                    "validation_agent_1": synonym_payload,
+                    "validation_agent_2": synonym_payload,
+                    "validation_agent_3": "",
+                    "validation_threshold": "2",
+                    "cycle_number": "2",
+                },
+            ),
+            tmp_path,
+        )
+        assert result.returncode == 0, (
+            "merge-validations should normalize common validator synonym payloads.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        merged = json.loads(result.stdout)
+        by_id = {item["finding_id"]: item for item in merged["validated"]}
+        assert by_id["completion-provider-untested"]["verdict"] == "confirmed"
+        assert by_id["completion-provider-untested"]["final_severity"] == "medium"
+        assert by_id["project-xml-rename-missing"]["verdict"] == "false_positive"
+
     @pytest.mark.parametrize(
         ("bad_output", "message_fragment"),
         [
@@ -724,6 +776,14 @@ class TestRecipeValidation:
         assert 'export QUALITY_AUDIT_RECIPE_DIR="{{quality_audit_recipe_dir}}"' in command
         assert "recipe_dirs=recipe_dirs" in command
         assert '"quality_audit_recipe_dir": recipe_dir' in command
+
+    def test_recursive_cycle_failure_is_propagated(self, recipe):
+        """Recursive child failures must fail the parent run-recursive-cycle step."""
+        recurse_step = next(s for s in recipe["steps"] if s["id"] == "run-recursive-cycle")
+        command = recurse_step["command"]
+        assert "if not result.success:" in command
+        assert "recursive quality-audit-cycle failed" in command
+        assert "raise SystemExit(1)" in command
 
 
 class TestRecurseNextCycleYamlValidity:
