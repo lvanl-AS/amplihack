@@ -1,5 +1,19 @@
 {
   "mcpServers": {
+    "azure-devops": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@azure-devops/mcp",
+        "alaskaair",
+        "-a", "pat",
+        "-d", "core", "work-items", "repositories", "pipelines", "work", "search", "wiki", "test-plans"
+      ],
+      "env": {
+        "PERSONAL_ACCESS_TOKEN": "${PERSONAL_ACCESS_TOKEN}"
+      }
+    },
     "workiq": {
       "disabled": true,
       "command": "npx",

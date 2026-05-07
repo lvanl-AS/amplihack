@@ -250,6 +250,7 @@ Examples:
     # Config options
     parser.add_argument("--org", help="Azure DevOps organization URL")
     parser.add_argument("--project", help="Project name")
+    parser.add_argument("--workspace", help="Named workspace alias from ~/.azure-devops-tools.json")
 
     args = parser.parse_args()
 
@@ -261,7 +262,7 @@ Examples:
         return  # Never reached
 
     # Load configuration
-    config = load_config()
+    config = load_config(workspace=args.workspace)
     org = args.org or config.get("org")
     project = args.project or config.get("project")
 

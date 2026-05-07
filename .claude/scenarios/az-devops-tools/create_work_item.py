@@ -281,11 +281,12 @@ Common fields:
     parser.add_argument("--org", help="Azure DevOps organization URL")
     parser.add_argument("--project", help="Project name")
     parser.add_argument("--config", help="Config file path")
+    parser.add_argument("--workspace", help="Named workspace alias from ~/.azure-devops-tools.json")
 
     args = parser.parse_args()
 
     # Load configuration
-    config = load_config(args.config)
+    config = load_config(config_file=args.config, workspace=args.workspace)
     org = args.org or config.get("org")
     project = args.project or config.get("project")
 

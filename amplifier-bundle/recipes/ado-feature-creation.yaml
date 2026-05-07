@@ -1,0 +1,335 @@
+name: "ado-feature-creation"
+description: "Conversational feature creation with value stress-test and slicability check"
+version: "1.0.0"
+author: "Amplihack Team"
+tags: ["ado", "create", "feature"]
+
+context:
+  workspace: ""
+  auth_status: ""
+  feature_template: ""
+  user_input: ""
+  topic_keywords: ""
+  duplicate_candidates: ""
+  parent_epic_context: ""
+  parent_epic_id: ""
+  has_frontend_signals: "false"
+  figma_context: ""
+  value_check: ""
+  feature_description: ""
+  stakeholders: ""
+  three_audience_wins: ""
+  quality_measures: ""
+  acceptance_criteria: ""
+  outcome_metrics: ""
+  okr_alignment: ""
+  candidate_stories: ""
+  feature_title: ""
+  revised_draft: ""
+  validation_result: ""
+  final_draft: ""
+  pre_commit_review: ""
+  user_save_decision: ""
+
+steps:
+  # Phase 1: Silent context load
+  - id: "auth-check"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/auth_check.py --quiet
+    output: "auth_status"
+
+  - id: "load-template"
+    type: "bash"
+    command: |
+      cat amplifier-bundle/skills/common/templates/reference_alaska_feature_template.md
+    output: "feature_template"
+
+  # Phase 2a: Intro (shared sub-recipe)
+  - id: "intro"
+    type: "recipe"
+    recipe: "skill-intro"
+    sub_context:
+      skill_name: "Feature Creator"
+      skill_description: "I help you build leadership-defensible feature pitches matching your team's template. I'll stress-test the value proposition, research metrics, and check slicability before saving."
+      what_i_need: "A topic, idea, or opportunity you want to turn into a feature"
+
+  # Phase 2b: Extract keywords + detect signals
+  - id: "extract-keywords"
+    type: "agent"
+    prompt: |
+      From the user's input, extract:
+      1. Search keywords for duplicate detection (2-4 key terms)
+      2. Whether this sounds frontend-related (has_frontend_signals)
+
+      User input: {{user_input}}
+    output: "topic_keywords"
+
+  # Phase 2c: Duplicate detection
+  - id: "duplicate-search"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/query_wiql.py \
+        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --wiql "SELECT [System.Id],[System.Title],[System.State] \
+          FROM WorkItems WHERE [System.WorkItemType] = 'Feature' \
+          AND [System.Title] CONTAINS '{{topic_keywords}}'" \
+        --format json
+    output: "duplicate_candidates"
+
+  - id: "evaluate-duplicates"
+    type: "agent"
+    prompt: |
+      Check for potential duplicate features.
+      If >70% similar: present to user, ask "update existing or create new?"
+      If 40-70%: mention as context. If none: continue silently.
+
+      Candidates: {{duplicate_candidates}}
+      User's topic: {{user_input}}
+    output: "duplicate_decision"
+
+  # Phase 3: Parent epic/initiative resolution
+  - id: "resolve-parent"
+    type: "agent"
+    prompt: |
+      Determine if this feature has a parent Epic or Initiative.
+
+      User's topic: {{user_input}}
+
+      If user provided a work item ID, fetch via get_work_item.py.
+      If they mentioned an epic/initiative name, search via MCP.
+      If neither, search for likely parents and present options.
+      If no parent: standalone features are fine.
+
+      If confirmed: read the full parent — description, goals,
+      existing child features. This context shapes the pitch.
+    output: "parent_epic_context"
+
+  # Phase 4: Figma check (conditional)
+  - id: "figma-check"
+    type: "agent"
+    condition: "has_frontend_signals == 'true'"
+    prompt: |
+      This sounds like it might involve UI work.
+      Ask: "Is there a Figma design for this?"
+      If yes: confirm the design reference.
+      If no: move on.
+    output: "figma_context"
+
+  # Phase 5: Value stress-test (always runs — not opt-in)
+  - id: "stress-test-value"
+    type: "agent"
+    prompt: |
+      Review the proposed feature for business value clarity.
+      Not a gate — a conversation to sharpen the pitch:
+      - Does the WHY hold up? Real problem, or solution looking for one?
+      - Obvious assumptions leadership would question?
+      - If something looks off, say so plainly. Better here than
+        in a stakeholder review.
+
+      Brief — 2-3 observations max. Banter, not interrogation.
+
+      User's topic: {{user_input}}
+      Parent context: {{parent_epic_context}}
+    output: "value_check"
+
+  # Phase 6: Sequential draft (order enforced by recipe runner)
+  - id: "draft-description"
+    type: "agent"
+    prompt: |
+      Draft WHAT and WHY sections using the feature template.
+      WHY MUST use Without/With contrast framing (team convention).
+
+      User's topic: {{user_input}}
+      Value stress-test findings: {{value_check}}
+      Parent context: {{parent_epic_context}}
+      Template: {{feature_template}}
+
+      Check recent discoveries (category: ado-feature-creation) for team patterns.
+    output: "feature_description"
+
+  - id: "gather-stakeholders"
+    type: "agent"
+    prompt: |
+      Ask the user: "Who are the stakeholders for this feature?"
+      NEVER invent stakeholder names. Always ask.
+      Description: {{feature_description}}
+    output: "stakeholders"
+
+  - id: "draft-wins"
+    type: "agent"
+    prompt: |
+      Draft Three-audience Wins: Guest Wins, Business Wins, Tech Wins.
+      Each audience must have at least one bullet.
+      Description: {{feature_description}}
+      Stakeholders: {{stakeholders}}
+    output: "three_audience_wins"
+
+  - id: "draft-quality-measures"
+    type: "agent"
+    prompt: |
+      Draft Quality Measure AC — guardrails like "no increase in X",
+      "no degradation in Y". These protect against unintended harm.
+      Description: {{feature_description}}
+      Wins: {{three_audience_wins}}
+    output: "quality_measures"
+
+  - id: "draft-ac"
+    type: "agent"
+    prompt: |
+      Draft functional acceptance criteria based on description and wins.
+      Each AC must trace to the description.
+      Description: {{feature_description}}
+      Wins: {{three_audience_wins}}
+      Quality measures: {{quality_measures}}
+    output: "acceptance_criteria"
+
+  - id: "research-metrics"
+    type: "agent"
+    prompt: |
+      Propose North Star metric + 2-3 leading indicators.
+      Research via MCP: past team outcomes, OKRs, industry benchmarks.
+      Trace each metric to specific AC.
+
+      If no evidence, say so — never invent numbers.
+
+      Description: {{feature_description}}
+      AC: {{acceptance_criteria}}
+    output: "outcome_metrics"
+
+  - id: "okr-alignment"
+    type: "agent"
+    prompt: |
+      Quick OKR/strategy alignment check via MCP wiki search.
+      1-2 line summary. Green check or soft flag. Never blocks.
+      Description: {{feature_description}}
+      AC: {{acceptance_criteria}}
+    output: "okr_alignment"
+
+  # Phase 7: Slicability check
+  - id: "slicability-check"
+    type: "agent"
+    prompt: |
+      Propose 3-7 candidate story titles that could deliver this feature.
+      Titles only — no full stories, no AC, no estimates.
+
+      This is a thinking aid, not a plan. Present as:
+      "Here's one way this could break down — does this feel right?"
+
+      If <3: "Feels vague — might be worth tightening scope."
+      If 8+: "Might be bigger than one feature — worth splitting."
+
+      Description: {{feature_description}}
+      AC: {{acceptance_criteria}}
+    output: "candidate_stories"
+
+  - id: "generate-title"
+    type: "agent"
+    prompt: |
+      Generate a title following team naming conventions.
+      Outcome-oriented, concise. Derived from the full feature body.
+
+      Description: {{feature_description}}
+      AC: {{acceptance_criteria}}
+      Metrics: {{outcome_metrics}}
+      Candidate stories: {{candidate_stories}}
+    output: "feature_title"
+
+  # Phase 8: Iterate with user
+  - id: "iterate-with-user"
+    type: "agent"
+    prompt: |
+      Present the full draft:
+
+      **Title:** {{feature_title}}
+      **Description:** {{feature_description}}
+      **Stakeholders:** {{stakeholders}}
+      **Three-audience Wins:** {{three_audience_wins}}
+      **Quality Measures:** {{quality_measures}}
+      **AC:** {{acceptance_criteria}}
+      **Metrics:** {{outcome_metrics}}
+      **OKR:** {{okr_alignment}}
+      **Candidate stories:** {{candidate_stories}}
+      **Figma:** {{figma_context}}
+      **Parent:** {{parent_epic_context}}
+
+      Accept changes across multiple rounds. Maintain traceability.
+      Loop until user says "looks good."
+    output: "revised_draft"
+
+  - id: "validate-consistency"
+    type: "agent"
+    prompt: |
+      Check draft for internal consistency:
+      - Do AC trace to description?
+      - Do metrics trace to AC?
+      - Do Wins cover all three audiences?
+      - Does WHY use Without/With framing?
+      - Does scope fit under parent (if any)?
+      - Does title reflect the body?
+
+      Draft: {{revised_draft}}
+    output: "validation_result"
+
+  - id: "re-iterate"
+    type: "agent"
+    condition: "'issue' in validation_result.lower()"
+    prompt: |
+      Show consistency issues: {{validation_result}}
+      Draft: {{revised_draft}}
+      Iterate until resolved or user overrides.
+    output: "final_draft"
+
+  # Phase 9: Pre-commit gate
+  - id: "pre-commit-review"
+    type: "agent"
+    prompt: |
+      Final quality review. Grade across: strategic clarity, pitch quality,
+      outcome metrics, slicability, value clarity.
+      Include perspective coverage (dev/QA/PM).
+
+      Soft warnings only. Offer: fix / save as-is / cancel.
+
+      Pre-save summary:
+      - Parent epic: {{#parent_epic_context}}resolved{{/parent_epic_context}}{{^parent_epic_context}}none{{/parent_epic_context}}
+      - Figma: {{#figma_context}}linked{{/figma_context}}{{^figma_context}}none{{/figma_context}}
+      - Duplicate check: completed
+      - Value stress-test: completed
+      - Slicability: {{candidate_stories}}
+
+      Draft: {{revised_draft}}{{final_draft}}
+    output: "user_save_decision"
+
+  # Phase 10: Write to ADO
+  - id: "write-to-ado"
+    type: "agent"
+    condition: "'save' in user_save_decision.lower()"
+    prompt: |
+      Create the Feature in ADO:
+      1. Use create_work_item.py (type: Feature) with full template-formatted description
+      2. Link to parent epic/initiative if resolved
+      3. Attach Figma link if provided
+      4. Post candidate story list as ADO comment (for later ado-story-creation reference)
+      5. Post any unresolved warnings as ADO comment
+
+      If attaching to parent not reviewed in session: warn + require override + audit comment.
+
+      Confirm with work item ID and link.
+
+      Draft: {{revised_draft}}{{final_draft}}
+      Parent: {{parent_epic_context}}
+      Figma: {{figma_context}}
+      Candidate stories: {{candidate_stories}}
+    output: "created_work_item"
+
+  # Phase 11: Reflection
+  - id: "reflect"
+    type: "agent"
+    prompt: |
+      Store discovery for category "ado-feature-creation":
+      - Feature ID, parent, key patterns
+      - Value stress-test findings, slicability outcome
+      - Whether user overrode quality gates
+
+      Created: {{created_work_item}}
+    output: "reflection"

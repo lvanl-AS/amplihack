@@ -1,0 +1,158 @@
+name: "ado-feature-review"
+description: "Six-dimension feature audit for strategic investment readiness"
+version: "1.0.0"
+author: "Amplihack Team"
+tags: ["ado", "review", "feature"]
+
+context:
+  work_item_id: ""
+  workspace: ""
+  feature_data: ""
+  comments: ""
+  revisions: ""
+  child_stories: ""
+  grading_results: ""
+  meta_findings: ""
+  grade_card: ""
+  user_action: ""
+
+steps:
+  # Phase 1: Deterministic fetch
+  - id: "fetch-feature"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/get_work_item.py \
+        --id {{work_item_id}} \
+        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --relations --format json
+    output: "feature_data"
+
+  - id: "fetch-comments"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/get_comments.py \
+        --id {{work_item_id}} \
+        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --format json
+    output: "comments"
+
+  - id: "fetch-revisions"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/get_revisions.py \
+        --id {{work_item_id}} \
+        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --format json
+    output: "revisions"
+
+  - id: "fetch-child-stories"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/query_wiql.py \
+        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --wiql "SELECT [System.Id],[System.Title],[System.State] \
+          FROM WorkItemLinks WHERE [Source].[System.Id] = {{work_item_id}} \
+          AND [System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward' \
+          MODE (MustContain)" \
+        --format json
+    output: "child_stories"
+
+  # Phase 2: Six-dimension grading
+  - id: "grade-feature"
+    type: "agent"
+    prompt: |
+      Grade this feature across six dimensions (A-F):
+
+      1. **Strategic clarity** — Problem-first framing, OKR alignment, customer terms
+      2. **Discovery/validation** — Assumptions identified, evidence cited, risks acknowledged
+      3. **Pitch quality** — Alaska template compliance, Without/With framing, all three Win audiences
+      4. **Outcome metrics** — North Star + leading indicators, baseline + target, evidence-backed
+      5. **Slicability** — Can it decompose into 3-7 stories? Propose candidate story titles
+      6. **Delivery feasibility** — Scope vs past team velocity, rollout strategy, exit criteria
+
+      Use MCP for: wiki templates, OKR searches, past comparable features, industry benchmarks.
+      Child stories are evidence of decomposition — grade coverage, don't grade individual story quality.
+
+      Reference checklists:
+      - amplifier-bundle/skills/common/checklists/ado/ado-feature-author.md
+      - amplifier-bundle/skills/common/checklists/ado/ado-metrics-coach.md
+      - amplifier-bundle/skills/common/checklists/ado/ado-story-architect.md
+
+      Feature data: {{feature_data}}
+      Comments: {{comments}}
+      Revisions: {{revisions}}
+      Child stories: {{child_stories}}
+    output: "grading_results"
+
+  # Phase 2.5: Meta-findings
+  - id: "meta-findings"
+    type: "agent"
+    prompt: |
+      Review grading for gaps, contradictions, or missed issues.
+      Inter-dimension contradictions? Grading inconsistencies?
+
+      Grading results: {{grading_results}}
+    output: "meta_findings"
+
+  # Phase 3: Grade card synthesis
+  - id: "compile-grade-card"
+    type: "agent"
+    prompt: |
+      Synthesize into grade card.
+      Overall = lowest dimension + one letter up if others are strong.
+      Include candidate story titles from slicability dimension.
+
+      Format:
+      - Letter grade (A-F) per dimension with justification
+      - Overall grade with reasoning
+      - Top improvements with concrete suggestions
+      - Candidate story titles (from slicability)
+
+      Grading: {{grading_results}}
+      Meta-findings: {{meta_findings}}
+    output: "grade_card"
+
+  # Phase 4: Conversational actions + recommendations
+  - id: "action-options"
+    type: "agent"
+    prompt: |
+      Present the grade card:
+
+      {{grade_card}}
+
+      Recommend next steps (dialogue out — do not execute these):
+      - If stories appear missing: "Use ado-story-creation to create stories, referencing parent feature #{{work_item_id}}"
+      - If existing child stories need review: "Run ado-story-review on stories listed above"
+
+      Available actions (can execute):
+      1. **Post review** — add grade card as ADO comment
+      2. **Improve feature** — apply fixes based on findings (needs review context)
+      3. **Argue back** — challenge specific grades
+      4. **Done**
+
+      Execute user's choice. Never block. PM has final say.
+    output: "user_action"
+
+  # Phase 4b: Improve sub-recipe (internal only)
+  - id: "improve-feature"
+    type: "recipe"
+    recipe: "ado-feature-improve"
+    condition: "'improve' in user_action.lower()"
+    sub_context:
+      work_item_id: "{{work_item_id}}"
+      workspace: "{{workspace}}"
+      grade_card: "{{grade_card}}"
+      grading_results: "{{grading_results}}"
+
+  # Phase 5: Reflection
+  - id: "reflect"
+    type: "agent"
+    prompt: |
+      Store discovery for category "ado-feature-review":
+      - Feature ID: #{{work_item_id}}
+      - Final grades, key issues, team patterns
+      - User action taken
+
+      Grade card: {{grade_card}}
+      Action: {{user_action}}
+    output: "reflection"

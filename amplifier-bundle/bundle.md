@@ -69,6 +69,13 @@ skills:
   quality-audit-workflow: { path: skills/quality-audit-workflow/SKILL.md }
   ultrathink-orchestrator: { path: skills/ultrathink-orchestrator/SKILL.md }
 
+  # ADO workflow skills (5)
+  ado-story-review: { path: skills/ado-story-review/SKILL.md }
+  ado-feature-review: { path: skills/ado-feature-review/SKILL.md }
+  ado-story-creation: { path: skills/ado-story-creation/SKILL.md }
+  ado-feature-creation: { path: skills/ado-feature-creation/SKILL.md }
+  ado-task-planning: { path: skills/ado-task-planning/SKILL.md }
+
   # Technical skills (19)
   agent-sdk: { path: skills/claude-agent-sdk/SKILL.md }
   azure-admin: { path: skills/azure-admin/SKILL.md }
@@ -161,6 +168,17 @@ agents:
   amplihack:analyzer:
     path: agents/specialized/analyzer.md
     description: "Code and system analysis specialist. Automatically selects TRIAGE (rapid scanning), DEEP (thorough investigation), or SYNTHESIS (multi-source integration) based on task. Use for understanding existing code, mapping dependencies, analyzing system behavior, or investigating architectural decisions."
+  # ADO specialized agents (3)
+  amplihack:ado-metrics-coach:
+    path: agents/specialized/ado-metrics-coach.md
+    description: "Design and review success metrics, OKRs, and measurement frameworks for ADO work items. Research-backs every metric proposal with past team outcomes, OKR alignment, and industry benchmarks. Never invents numbers."
+  amplihack:ado-story-architect:
+    path: agents/specialized/ado-story-architect.md
+    description: "Draft, split, and review user stories and acceptance criteria. Enforces Connextra format, INVEST compliance, Gherkin AC, and vertical slicing. Proposes story decomposition for features. Never mentions framework names to users."
+  amplihack:ado-feature-author:
+    path: agents/specialized/ado-feature-author.md
+    description: "Write and review feature pitches matching the Alaska team template. Enforces Without/With contrast framing, three-audience Wins, quality measures, and leadership-defensible structure. Stakeholders always asked, never invented."
+
   amplihack:azure-kubernetes-expert:
     path: agents/specialized/azure-kubernetes-expert.md
     description: "Azure Kubernetes Service (AKS) expert with deep knowledge of production deployments, networking, security, and operations"

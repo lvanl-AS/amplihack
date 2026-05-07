@@ -1,0 +1,178 @@
+name: "ado-task-planning"
+description: "Decompose a user story into actionable sprint tasks"
+version: "1.0.0"
+author: "Amplihack Team"
+tags: ["ado", "tasks", "planning"]
+
+context:
+  workspace: ""
+  work_item_id: ""
+  auth_status: ""
+  story_data: ""
+  parent_feature_context: ""
+  task_breakdown: ""
+  anti_pattern_flags: ""
+  final_task_list: ""
+  target_iteration: ""
+  user_approval: ""
+
+steps:
+  # Phase 1: Auth + fetch parent story
+  - id: "auth-check"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/auth_check.py --quiet
+    output: "auth_status"
+
+  - id: "fetch-parent-story"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/get_work_item.py \
+        --id {{work_item_id}} \
+        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --relations --format json
+    output: "story_data"
+
+  - id: "validate-parent-type"
+    type: "agent"
+    prompt: |
+      Verify this work item is a User Story.
+      If it's a Feature, Bug, or Epic, redirect:
+      "Tasks always live under a User Story. This is a [type].
+      Want to find a story under it, or create one with ado-story-creation?"
+
+      If it IS a story, fetch the parent feature via MCP for context.
+
+      Work item: {{story_data}}
+    output: "parent_feature_context"
+
+  # Phase 2: Intro (shared sub-recipe)
+  - id: "intro"
+    type: "recipe"
+    recipe: "skill-intro"
+    sub_context:
+      skill_name: "Task Planner"
+      skill_description: "I help you break down a user story into actionable sprint tasks. I'll map each task to acceptance criteria, flag gaps in testing and observability, and create everything in ADO when you're ready."
+      what_i_need: "I'll be planning tasks for story #{{work_item_id}}"
+
+  # Phase 3: Decompose
+  - id: "decompose"
+    type: "agent"
+    prompt: |
+      Decompose this story into 4-8 tasks.
+
+      Each task: action-oriented title (verb + object),
+      1-3 line description, AC mapping.
+
+      Rules:
+      - Describe the WHAT, never the HOW. No code references,
+        no file paths, no specific technical solutions.
+      - No sizing. No points, T-shirts, or hours. Ever.
+      - Every task maps to at least one AC. Unmapped = scope creep flag.
+      - If <4 tasks without one feeling huge, story is probably
+        too big — flag it.
+
+      Story: {{story_data}}
+      Parent feature: {{parent_feature_context}}
+    output: "task_breakdown"
+
+  # Phase 4: Anti-pattern critique
+  - id: "anti-pattern-check"
+    type: "agent"
+    prompt: |
+      Review the task breakdown for common gaps. Flag (high-level only):
+      1. Missing testing task — no test work at all
+      2. Missing observability task — no analytics/logging/dashboard
+         (especially if story has a Metrics section)
+      3. Missing rollout task — no feature flag/staged rollout/rollback
+         (especially for user-facing changes)
+      4. Task feels too broad — spans many concerns, suggest splitting
+      5. Task is actually a story — describes a behavior outcome,
+         not an implementation step
+
+      0-3 soft warnings in plain English. Advisory only.
+      Do NOT reference specific code, files, or technical solutions.
+
+      Tasks: {{task_breakdown}}
+      Story: {{story_data}}
+    output: "anti_pattern_flags"
+
+  # Phase 5: Iterate with user
+  - id: "iterate-with-user"
+    type: "agent"
+    prompt: |
+      Present the task breakdown as a clear scannable block:
+      - Numbered tasks with title, description, AC mapping
+      - Anti-pattern flags as "things worth noting"
+      - "Sizing comes later — your team handles that in planning."
+
+      User can: split, merge, add, drop, retitle tasks.
+      Loop until happy.
+
+      Tasks: {{task_breakdown}}
+      Flags: {{anti_pattern_flags}}
+    output: "final_task_list"
+
+  # Phase 6: Sprint placement (MCP for iterations)
+  - id: "sprint-placement"
+    type: "agent"
+    prompt: |
+      Tasks default to the parent story's iteration.
+      Use MCP (work_list_team_iterations) to get available iterations.
+
+      Ask: "These will go in [parent's iteration]. Sound right,
+      or should they go in a different sprint?"
+
+      Options: inherit parent / different iteration / backlog only.
+
+      Story: {{story_data}}
+    output: "target_iteration"
+
+  # Phase 7: Final approval
+  - id: "approval-gate"
+    type: "agent"
+    prompt: |
+      Present final confirmation:
+      "Ready to create these tasks under story #{{work_item_id}}?"
+
+      Show task count and list.
+      User confirms -> proceed.
+      User cancels -> return to iteration.
+
+      Tasks: {{final_task_list}}
+      Sprint: {{target_iteration}}
+    output: "user_approval"
+
+  # Phase 8: Write to ADO
+  - id: "write-tasks"
+    type: "agent"
+    condition: "'confirm' in user_approval.lower()"
+    prompt: |
+      Create each task in ADO:
+      1. Use create_work_item.py (type: Task) for each task
+      2. Link each to parent story via link_parent.py
+      3. Set iteration path if specified
+      4. No sizing fields — leave blank
+
+      After all created, post summary comment on parent story
+      via MCP listing all task IDs and titles.
+      Include unresolved anti-pattern flags as audit trail.
+
+      Confirm with task IDs and links.
+
+      Tasks: {{final_task_list}}
+      Parent: {{work_item_id}}
+      Iteration: {{target_iteration}}
+    output: "created_tasks"
+
+  # Phase 9: Reflection
+  - id: "reflect"
+    type: "agent"
+    prompt: |
+      Store discovery for category "ado-task-planning":
+      - Parent story ID, task count
+      - Anti-pattern flags raised vs overridden
+      - Team patterns
+
+      Created: {{created_tasks}}
+    output: "reflection"

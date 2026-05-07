@@ -1,4 +1,12 @@
 {
+  "ado-story-review": "pending",
+  "ado-feature-review": "pending",
+  "ado-story-creation": "pending",
+  "ado-feature-creation": "pending",
+  "ado-task-planning": "pending",
+  "ado-story-improve": "pending",
+  "ado-feature-improve": "pending",
+  "skill-intro": "pending",
   "auto-workflow": "3baaee4ed35b2381",
   "cascade-workflow": "ee2ce111ae5d88ef",
   "code-atlas": "a69cc6968917a715",

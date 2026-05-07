@@ -1,0 +1,51 @@
+name: "ado-feature-improve"
+description: "Internal sub-recipe for improving a feature based on review findings. Requires review context — cannot run standalone."
+version: "1.0.0"
+author: "Amplihack Team"
+tags: ["ado", "internal", "improve"]
+
+# INTERNAL SUB-RECIPE — No SKILL.md, no bundle.md registration
+# Called by: ado-feature-review ONLY
+# Requires: grade_card, grading_results from parent recipe context
+
+context:
+  work_item_id: ""
+  workspace: ""
+  grade_card: ""
+  grading_results: ""
+
+steps:
+  # Validate context — fail fast if called without review data
+  - id: "validate-context"
+    type: "bash"
+    command: |
+      if [ -z "{{grade_card}}" ] || [ -z "{{grading_results}}" ]; then
+        echo "ERROR: This sub-recipe requires review context (grade_card, grading_results)."
+        echo "It cannot run standalone — use ado-feature-review first, then choose 'Improve feature'."
+        exit 1
+      fi
+      echo "Context validated — review data present."
+    output: "context_valid"
+
+  # Apply improvements based on review findings
+  - id: "improve-feature"
+    type: "agent"
+    prompt: |
+      Using the review findings, improve this feature.
+
+      For each dimension graded below B:
+      - Draft specific improvements
+      - Show the before/after for each change
+      - Ensure Without/With framing is correct in WHY section
+      - Ensure all three Win audiences are covered
+      - Ensure quality measures are guardrails, not success metrics
+
+      Present all changes to the user for approval before writing to ADO.
+
+      Work item: #{{work_item_id}}
+      Grade card: {{grade_card}}
+      Grading details: {{grading_results}}
+
+      Use update_work_item.py to apply approved changes.
+      Multiple rounds of improvement are fine — loop until user is satisfied.
+    output: "improvements_applied"

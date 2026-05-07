@@ -1,0 +1,144 @@
+name: "ado-story-review"
+description: "Five-dimension story audit with letter grades"
+version: "1.0.0"
+author: "Amplihack Team"
+tags: ["ado", "review", "story"]
+
+context:
+  work_item_id: ""
+  workspace: ""
+  story_data: ""
+  comments: ""
+  revisions: ""
+  grading_results: ""
+  meta_findings: ""
+  grade_card: ""
+  user_action: ""
+
+steps:
+  # Phase 1: Deterministic fetch (all bash — guaranteed execution)
+  - id: "fetch-story"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/get_work_item.py \
+        --id {{work_item_id}} \
+        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --relations --format json
+    output: "story_data"
+
+  - id: "fetch-comments"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/get_comments.py \
+        --id {{work_item_id}} \
+        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --format json
+    output: "comments"
+
+  - id: "fetch-revisions"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/get_revisions.py \
+        --id {{work_item_id}} \
+        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --format json
+    output: "revisions"
+
+  # Phase 2: Agent grading (MCP for wiki/template enrichment, agent judgment for grading)
+  - id: "grade-story"
+    type: "agent"
+    prompt: |
+      Grade this story across five dimensions (A-F):
+      1. Template compliance — does it follow the Alaska story template?
+      2. AC quality — testable, behavior-focused, Gherkin, negative path covered?
+      3. Writing clarity — plain English, no jargon, a stranger could understand?
+      4. Business deliverable — actionable, estimable, fits in a sprint?
+      5. Value clarity — benefit articulated, metric traceable to AC?
+
+      Use MCP to fetch the story template from wiki for comparison.
+      Use MCP to check parent feature for alignment.
+
+      Reference checklist: amplifier-bundle/skills/common/checklists/ado/ado-story-architect.md
+
+      Story data: {{story_data}}
+      Comments: {{comments}}
+      Revisions: {{revisions}}
+    output: "grading_results"
+
+  # Phase 2.5: Meta-findings
+  - id: "meta-findings"
+    type: "agent"
+    prompt: |
+      Review the grading results for gaps, contradictions, or missed issues.
+      Are there inter-dimension contradictions? Does one dimension's grade
+      conflict with another's assessment? Any quality issues not covered?
+
+      Grading results: {{grading_results}}
+    output: "meta_findings"
+
+  # Phase 3: Grade card synthesis
+  - id: "compile-grade-card"
+    type: "agent"
+    prompt: |
+      Synthesize grading results and meta-findings into a grade card.
+
+      Format:
+      - Letter grade (A-F) per dimension with one-line justification
+      - Overall grade
+      - Top 3 specific improvement suggestions with concrete rewrites
+      - Strengths worth preserving
+
+      Grading: {{grading_results}}
+      Meta-findings: {{meta_findings}}
+    output: "grade_card"
+
+  # Phase 4: Conversational actions
+  - id: "action-options"
+    type: "agent"
+    prompt: |
+      Present the grade card to the user:
+
+      {{grade_card}}
+
+      Explain available actions:
+      1. **Post review** — add grade card as ADO comment on work item #{{work_item_id}}
+      2. **Improve story** — apply fixes based on findings (guided improvement using review context)
+      3. **Argue back** — challenge specific grades with evidence
+      4. **Done** — end review
+
+      Execute the user's choice:
+      - For "Post review": use MCP to add comment on the work item
+      - For "Argue back": discuss the challenged grades, re-grade if warranted
+      - For "Improve story": signal that the improve sub-recipe should run
+      - For "Done": wrap up
+
+      Never block the user. PM has final say on all grades.
+    output: "user_action"
+
+  # Phase 4b: Improve sub-recipe (internal only — no standalone SKILL.md)
+  - id: "improve-story"
+    type: "recipe"
+    recipe: "ado-story-improve"
+    condition: "'improve' in user_action.lower()"
+    sub_context:
+      work_item_id: "{{work_item_id}}"
+      workspace: "{{workspace}}"
+      grade_card: "{{grade_card}}"
+      grading_results: "{{grading_results}}"
+
+  # Phase 5: Reflection
+  - id: "reflect"
+    type: "agent"
+    prompt: |
+      Store a discovery summarizing this review:
+      - Story ID: #{{work_item_id}}
+      - Final grades from grade card
+      - Key issues found
+      - Whether user posted review, improved, argued, or exited
+      - Any recurring patterns across past reviews
+
+      Use store_discovery(content, category="ado-story-review") to persist.
+
+      Grade card: {{grade_card}}
+      User action: {{user_action}}
+    output: "reflection"

@@ -141,26 +141,55 @@ class AzCliWrapper:
         return self.run(command, timeout=timeout)
 
 
-def load_config(config_file: str | None = None) -> dict[str, str]:
+def load_config(
+    config_file: str | None = None,
+    workspace: str | None = None,
+) -> dict[str, str]:
     """Load Azure DevOps configuration.
 
-    Loads from:
-    1. Specified config file
-    2. Environment variables (AZURE_DEVOPS_ORG_URL, AZURE_DEVOPS_PROJECT)
-    3. az devops configure --list output
+    Loads from (in priority order):
+    1. Named workspace in config file (~/.azure-devops-tools.json)
+    2. Flat config file values
+    3. Environment variables (AZURE_DEVOPS_ORG_URL, AZURE_DEVOPS_PROJECT)
+    4. az devops configure --list output
 
     Args:
-        config_file: Path to JSON config file (optional)
+        config_file: Path to JSON config file (optional, defaults to ~/.azure-devops-tools.json)
+        workspace: Named workspace alias to resolve from config file
 
     Returns:
-        Dictionary with org and project keys
+        Dictionary with org, project, and optionally area_path keys
     """
     config = {}
+    default_config_path = Path.home() / ".azure-devops-tools.json"
+
+    # Determine config file path
+    config_path = Path(config_file) if config_file else default_config_path
 
     # Try config file first
-    if config_file and Path(config_file).exists():
+    if config_path.exists():
         try:
-            config = json.loads(Path(config_file).read_text())
+            raw = json.loads(config_path.read_text())
+
+            # Check for workspace support
+            if "workspaces" in raw:
+                # Resolve workspace name: explicit arg > default > None
+                ws_name = workspace or raw.get("default")
+                if ws_name and ws_name in raw["workspaces"]:
+                    ws = raw["workspaces"][ws_name]
+                    config["org"] = ws.get("org", "")
+                    config["project"] = ws.get("project", "")
+                    if ws.get("area_path"):
+                        config["area_path"] = ws["area_path"]
+                elif ws_name:
+                    print(
+                        f"Warning: Workspace '{ws_name}' not found in config. "
+                        f"Available: {', '.join(raw['workspaces'].keys())}",
+                        file=sys.stderr,
+                    )
+            else:
+                # Flat config (backward compatible)
+                config = raw
         except (OSError, json.JSONDecodeError) as e:
             print(f"Warning: Could not load config file: {e}", file=sys.stderr)
 

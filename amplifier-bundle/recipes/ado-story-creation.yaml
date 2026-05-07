@@ -1,0 +1,293 @@
+name: "ado-story-creation"
+description: "Conversational story creation with sequential drafting and quality gates"
+version: "1.0.0"
+author: "Amplihack Team"
+tags: ["ado", "create", "story"]
+
+context:
+  workspace: ""
+  auth_status: ""
+  story_template: ""
+  user_input: ""
+  topic_keywords: ""
+  duplicate_candidates: ""
+  parent_feature_context: ""
+  parent_feature_id: ""
+  has_frontend_signals: "false"
+  figma_context: ""
+  story_description: ""
+  acceptance_criteria: ""
+  outcome_metrics: ""
+  okr_alignment: ""
+  story_title: ""
+  revised_draft: ""
+  validation_result: ""
+  final_draft: ""
+  pre_commit_review: ""
+  user_save_decision: ""
+
+steps:
+  # Phase 1: Silent context load
+  - id: "auth-check"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/auth_check.py --quiet
+    output: "auth_status"
+
+  - id: "load-template"
+    type: "bash"
+    command: |
+      cat amplifier-bundle/skills/common/templates/reference_alaska_story_template.md
+    output: "story_template"
+
+  # Phase 2a: Intro (shared sub-recipe)
+  - id: "intro"
+    type: "recipe"
+    recipe: "skill-intro"
+    sub_context:
+      skill_name: "Story Creator"
+      skill_description: "I help you create well-structured ADO user stories matching your team's template. I'll research metrics, check for duplicates, and run a quality review before saving."
+      what_i_need: "A topic or idea for the story you want to create"
+
+  # Phase 2b: Extract keywords + detect signals
+  - id: "extract-keywords"
+    type: "agent"
+    prompt: |
+      From the user's input, extract:
+      1. Search keywords for duplicate detection (2-4 key terms)
+      2. Whether this sounds like a frontend story (UI, page, button, screen,
+         layout, component, mobile, responsive, design, modal, dropdown, form)
+
+      Set has_frontend_signals to "true" or "false".
+
+      User input: {{user_input}}
+    output: "topic_keywords"
+
+  # Phase 2c: Duplicate detection
+  - id: "duplicate-search"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/query_wiql.py \
+        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --wiql "SELECT [System.Id],[System.Title],[System.State] \
+          FROM WorkItems WHERE [System.WorkItemType] = 'User Story' \
+          AND [System.Title] CONTAINS '{{topic_keywords}}'" \
+        --format json
+    output: "duplicate_candidates"
+
+  # Phase 2d: Evaluate duplicates
+  - id: "evaluate-duplicates"
+    type: "agent"
+    prompt: |
+      Check search results for potential duplicates of the user's topic.
+      If >70% similar: present to user, ask "update existing or create new?"
+      If 40-70%: mention as context, continue.
+      If no matches: continue silently.
+
+      Candidates: {{duplicate_candidates}}
+      User's topic: {{user_input}}
+    output: "duplicate_decision"
+
+  # Phase 3: Parent feature resolution
+  - id: "resolve-parent-feature"
+    type: "agent"
+    prompt: |
+      Determine the parent Feature for this story.
+
+      User's topic: {{user_input}}
+
+      If user provided a work item ID, fetch it with get_work_item.py.
+      If they mentioned a feature name, search via MCP.
+      If neither, search for likely parents and present options.
+      If no parent: "No parent feature? That's fine — standalone stories
+      and bugs are valid. You can create a feature later with ado-feature-creation."
+
+      If a parent is confirmed: read the FULL feature — description, AC, metrics,
+      children. This context shapes the entire draft.
+
+      Unparented is fine. But if the user later wants to attach to a feature at
+      save time, we'll need to review it then.
+    output: "parent_feature_context"
+
+  # Phase 4: Figma check (conditional on frontend signals)
+  - id: "figma-check"
+    type: "agent"
+    condition: "has_frontend_signals == 'true'"
+    prompt: |
+      This sounds like it might involve UI work.
+      Ask: "Is there a Figma design for this? If so, share the link or
+      describe where to find it."
+
+      If yes: confirm the design reference.
+      If no: acknowledge, move on. Set a flag for the pre-save summary.
+    output: "figma_context"
+
+  # Phase 6: Sequential draft (order enforced by recipe runner)
+  - id: "draft-description"
+    type: "agent"
+    prompt: |
+      Draft the story description using Connextra format:
+      "As a [specific persona], I want [capability], so that [benefit]."
+
+      Include context section and scope (in/out of scope).
+
+      Parent feature context: {{parent_feature_context}}
+      User's topic: {{user_input}}
+      Template: {{story_template}}
+
+      Check recent discoveries (category: ado-story-creation) for team patterns.
+      Use plain English. Never mention Connextra, INVEST, or framework names.
+    output: "story_description"
+
+  - id: "draft-ac"
+    type: "agent"
+    prompt: |
+      Draft 3-5 testable acceptance criteria based on the description.
+      Each AC must trace to something in the description.
+      Use Given/When/Then format. Include at least one unhappy path.
+
+      Description: {{story_description}}
+      Template: {{story_template}}
+    output: "acceptance_criteria"
+
+  - id: "research-metrics"
+    type: "agent"
+    prompt: |
+      Propose a quantifiable outcome metric tied to specific AC.
+      Research via MCP: past team outcomes, OKRs, industry benchmarks.
+
+      Include: metric name, baseline (or "to be established"), target,
+      timeframe, and which AC it validates.
+
+      If research turns up nothing, say so and ask the user.
+
+      Description: {{story_description}}
+      AC: {{acceptance_criteria}}
+    output: "outcome_metrics"
+
+  - id: "okr-alignment"
+    type: "agent"
+    prompt: |
+      Quick OKR/strategy alignment check.
+      Search wiki via MCP for team OKRs. 1-2 line summary.
+      Green check if aligned, soft flag if not. Never blocks the save.
+
+      Description: {{story_description}}
+      AC: {{acceptance_criteria}}
+    output: "okr_alignment"
+
+  - id: "generate-title"
+    type: "agent"
+    prompt: |
+      Generate a title following team naming conventions.
+      Verb phrase from the user's perspective: "User can view X", not "Add X feature."
+      Derived from the full story body — title summarizes, not leads.
+
+      Description: {{story_description}}
+      AC: {{acceptance_criteria}}
+      Metrics: {{outcome_metrics}}
+    output: "story_title"
+
+  # Phase 7: Iterate with user
+  - id: "iterate-with-user"
+    type: "agent"
+    prompt: |
+      Present the full draft to the user:
+
+      **Title:** {{story_title}}
+
+      **Description:** {{story_description}}
+
+      **Acceptance Criteria:** {{acceptance_criteria}}
+
+      **Outcome Metric:** {{outcome_metrics}}
+
+      **OKR Alignment:** {{okr_alignment}}
+
+      **Figma:** {{figma_context}}
+
+      **Parent Feature:** {{parent_feature_context}}
+
+      Accept changes across multiple rounds. After each change,
+      flag if other sections need updating to maintain traceability.
+      Loop until user says "looks good."
+    output: "revised_draft"
+
+  # Phase 7b: Consistency validation
+  - id: "validate-consistency"
+    type: "agent"
+    prompt: |
+      Check this draft for internal consistency:
+      - Do AC trace to description?
+      - Does metric trace to AC?
+      - Does title reflect the body?
+      - Does scope fit under parent feature (if any)?
+
+      Flag issues or confirm "consistent."
+
+      Draft: {{revised_draft}}
+    output: "validation_result"
+
+  - id: "re-iterate"
+    type: "agent"
+    condition: "'issue' in validation_result.lower()"
+    prompt: |
+      Show consistency issues to user: {{validation_result}}
+      Draft: {{revised_draft}}
+      Iterate until resolved or user overrides.
+    output: "final_draft"
+
+  # Phase 9: Pre-commit review gate
+  - id: "pre-commit-review"
+    type: "agent"
+    prompt: |
+      Final quality review before saving. Grade the draft across:
+      template compliance, AC quality, writing clarity, value clarity.
+
+      Show soft warnings, not blockers. Offer:
+      1. Fix in chat
+      2. Save as-is (post warnings as ADO comment)
+      3. Cancel
+
+      Pre-save summary:
+      - Parent feature: {{#parent_feature_context}}resolved{{/parent_feature_context}}{{^parent_feature_context}}none{{/parent_feature_context}}
+      - Figma design: {{#figma_context}}linked{{/figma_context}}{{^figma_context}}none{{/figma_context}}
+      - Duplicate check: completed
+
+      Draft: {{revised_draft}}{{final_draft}}
+    output: "user_save_decision"
+
+  # Phase 10: Write to ADO
+  - id: "write-to-ado"
+    type: "agent"
+    condition: "'save' in user_save_decision.lower()"
+    prompt: |
+      Create the work item in ADO:
+      1. Use create_work_item.py with full template-formatted body
+      2. Link to parent feature if resolved
+      3. Attach Figma link if provided
+      4. Post any unresolved warnings as ADO comment
+
+      If user is attaching to a feature that was NOT reviewed in this session:
+      "I didn't review this feature during our session. Attaching without
+      alignment review. Override? Your call."
+      If user overrides, post audit comment on work item.
+
+      Confirm with work item ID and link.
+
+      Draft: {{revised_draft}}{{final_draft}}
+      Parent: {{parent_feature_context}}
+      Figma: {{figma_context}}
+    output: "created_work_item"
+
+  # Phase 11: Reflection
+  - id: "reflect"
+    type: "agent"
+    prompt: |
+      Store discovery for category "ado-story-creation":
+      - Story ID, parent feature, key patterns
+      - Whether user overrode any quality gates
+
+      Created: {{created_work_item}}
+      Save decision: {{user_save_decision}}
+    output: "reflection"
