@@ -5,7 +5,7 @@ author: "Amplihack Team"
 tags: ["ado", "create", "feature"]
 
 context:
-  workspace: ""
+  selected_workspace: ""
   auth_status: ""
   feature_template: ""
   user_input: ""
@@ -32,11 +32,12 @@ context:
   user_save_decision: ""
 
 steps:
-  # Phase 1: Silent context load
+  # Phase 1: Auth check against selected workspace
   - id: "auth-check"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/auth_check.py --quiet
+      python .claude/scenarios/az-devops-tools/auth_check.py \
+        --workspace "{{selected_workspace}}" --quiet
     output: "auth_status"
 
   - id: "load-template"
@@ -45,16 +46,7 @@ steps:
       cat amplifier-bundle/skills/common/templates/reference_alaska_feature_template.md
     output: "feature_template"
 
-  # Phase 2a: Intro (shared sub-recipe)
-  - id: "intro"
-    type: "recipe"
-    recipe: "skill-intro"
-    sub_context:
-      skill_name: "Feature Creator"
-      skill_description: "I help you build leadership-defensible feature pitches matching your team's template. I'll stress-test the value proposition, research metrics, and check slicability before saving."
-      what_i_need: "A topic, idea, or opportunity you want to turn into a feature"
-
-  # Phase 2b: Extract keywords + detect signals
+  # Phase 2: Extract keywords + detect signals
   - id: "extract-keywords"
     type: "agent"
     prompt: |
@@ -70,7 +62,7 @@ steps:
     type: "bash"
     command: |
       python .claude/scenarios/az-devops-tools/query_wiql.py \
-        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --workspace "{{selected_workspace}}" \
         --wiql "SELECT [System.Id],[System.Title],[System.State] \
           FROM WorkItems WHERE [System.WorkItemType] = 'Feature' \
           AND [System.Title] CONTAINS '{{topic_keywords}}'" \
@@ -300,27 +292,127 @@ steps:
       Draft: {{revised_draft}}{{final_draft}}
     output: "user_save_decision"
 
-  # Phase 10: Write to ADO
-  - id: "write-to-ado"
+  # Phase 10a: Prepare manifest — agent writes files, no ADO access
+  - id: "prepare-manifest"
     type: "agent"
     condition: "'save' in user_save_decision.lower()"
     prompt: |
-      Create the Feature in ADO:
-      1. Use create_work_item.py (type: Feature) with full template-formatted description
-      2. Link to parent epic/initiative if resolved
-      3. Attach Figma link if provided
-      4. Post candidate story list as ADO comment (for later ado-story-creation reference)
-      5. Post any unresolved warnings as ADO comment
+      Prepare the final feature for creation. Write three files:
 
-      If attaching to parent not reviewed in session: warn + require override + audit comment.
+      1. /tmp/ado_new_feature_manifest.json — JSON metadata:
+         {
+           "type": "Feature",
+           "title": "<feature title>",
+           "parent_id": <integer or null>,
+           "tags": ["tag1", "tag2"],
+           "area": "<area path or null>",
+           "iteration": "<iteration path or null>",
+           "warnings": "<unresolved quality warnings text, or null>"
+         }
 
-      Confirm with work item ID and link.
+      2. /tmp/ado_new_feature_description.md — full feature description in markdown.
+         Include the Figma link in this file if one was provided.
+         If attaching to a parent not reviewed this session, note that in the
+         warnings field of the manifest (not as a blocker).
+
+      3. /tmp/ado_new_feature_ac.html — acceptance criteria in HTML.
+
+      Only create files that have content. Do NOT call any MCP tools or ADO APIs.
+      The bash create step handles all ADO writes.
 
       Draft: {{revised_draft}}{{final_draft}}
       Parent: {{parent_epic_context}}
       Figma: {{figma_context}}
-      Candidate stories: {{candidate_stories}}
+      Save decision: {{user_save_decision}}
+    output: "manifest_prepared"
+
+  # Phase 10b: Create in ADO — deterministic bash
+  - id: "create-in-ado"
+    type: "bash"
+    condition: "'save' in user_save_decision.lower()"
+    command: |
+      MANIFEST="/tmp/ado_new_feature_manifest.json"
+      DESC_FILE="/tmp/ado_new_feature_description.md"
+      AC_FILE="/tmp/ado_new_feature_ac.html"
+
+      if [ ! -f "$MANIFEST" ]; then
+        echo "No manifest found — skipping creation."
+        exit 1
+      fi
+
+      TITLE=$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(m.get('title',''))")
+      PARENT=$(python3 -c "import json; m=json.load(open('$MANIFEST')); v=m.get('parent_id'); print(v if v else '')")
+      TAGS=$(python3 -c "import json; m=json.load(open('$MANIFEST')); t=m.get('tags') or ''; print(','.join(t) if isinstance(t,list) else t)")
+      AREA=$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(m.get('area') or '')")
+      ITER=$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(m.get('iteration') or '')")
+
+      CMD=(python .claude/scenarios/az-devops-tools/create_work_item.py
+           --type "Feature"
+           --title "$TITLE"
+           --workspace "{{selected_workspace}}")
+
+      [ -f "$DESC_FILE" ]    && CMD+=(--description "$(cat "$DESC_FILE")")
+      [ -n "$PARENT" ]       && CMD+=(--parent "$PARENT")
+      [ -n "$TAGS" ]         && CMD+=(--tags "$TAGS")
+      [ -n "$AREA" ]         && CMD+=(--area "$AREA")
+      [ -n "$ITER" ]         && CMD+=(--iteration "$ITER")
+      [ -f "$AC_FILE" ]      && CMD+=(--fields "Microsoft.VSTS.Common.AcceptanceCriteria=$(cat "$AC_FILE")")
+
+      OUTPUT=$("${CMD[@]}")
+      EXIT_CODE=$?
+      echo "$OUTPUT"
+      echo "$OUTPUT" | grep -oE 'ID: [0-9]+' | grep -oE '[0-9]+' > /tmp/ado_new_feature_id.txt
+      exit $EXIT_CODE
     output: "created_work_item"
+
+  # Phase 10c: Post candidate stories as ADO comment
+  - id: "post-candidate-stories"
+    type: "bash"
+    condition: "'save' in user_save_decision.lower()"
+    command: |
+      ITEM_ID=$(cat /tmp/ado_new_feature_id.txt 2>/dev/null)
+
+      if [ -z "$ITEM_ID" ]; then
+        echo "No work item ID — skipping candidate stories comment."
+        exit 0
+      fi
+
+      python .claude/scenarios/az-devops-tools/update_work_item.py \
+        --id "$ITEM_ID" \
+        --workspace "{{selected_workspace}}" \
+        --comment "Candidate stories (slicability check — for ado-story-creation reference):\n\n{{candidate_stories}}"
+    output: "candidates_posted"
+
+  # Phase 10d: Post warnings as ADO comment if any
+  - id: "post-warnings"
+    type: "bash"
+    condition: "'save' in user_save_decision.lower()"
+    command: |
+      MANIFEST="/tmp/ado_new_feature_manifest.json"
+      ITEM_ID=$(cat /tmp/ado_new_feature_id.txt 2>/dev/null)
+      WARNINGS=$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(m.get('warnings') or '')" 2>/dev/null)
+
+      if [ -z "$ITEM_ID" ] || [ -z "$WARNINGS" ]; then
+        echo "No warnings to post."
+        exit 0
+      fi
+
+      python .claude/scenarios/az-devops-tools/update_work_item.py \
+        --id "$ITEM_ID" \
+        --workspace "{{selected_workspace}}" \
+        --comment "Pre-save quality warnings (PM accepted):\n\n$WARNINGS"
+    output: "warnings_posted"
+
+  # Phase 10e: Cleanup temp files
+  - id: "cleanup-temp"
+    type: "bash"
+    command: |
+      rm -f /tmp/ado_new_feature_manifest.json \
+             /tmp/ado_new_feature_description.md \
+             /tmp/ado_new_feature_ac.html \
+             /tmp/ado_new_feature_id.txt
+      echo "Temp files cleaned up."
+    output: "cleanup_done"
 
   # Phase 11: Reflection
   - id: "reflect"

@@ -38,6 +38,17 @@ Activate when the user:
 - Says "create feature", "new feature", or "I have an idea for..."
 - Has an opportunity they want to turn into a feature pitch
 
+## Execution
+
+Board selection runs before the recipe so the recipe runner never needs TTY access:
+
+```bash
+WORKSPACE=$(python .claude/scenarios/az-devops-tools/select_board.py)
+amplihack recipe run amplifier-bundle/recipes/ado-feature-creation.yaml \
+  -c selected_workspace="$WORKSPACE" \
+  -c user_input="<user's feature idea>"
+```
+
 ## Recipe
 
 This skill is driven by the `ado-feature-creation` recipe.
@@ -45,8 +56,7 @@ This skill is driven by the `ado-feature-creation` recipe.
 ## Workflow
 
 1. **Silent context** — Auth check + load feature template
-2. **Intro** — Shared greeting sub-recipe
-3. **Duplicate detection** — WIQL search for similar features
+2. **Duplicate detection** — WIQL search for similar features
 4. **Parent epic/initiative resolution** — Find parent Epic if applicable. Unparented is fine
 5. **Figma check** — Conditional on frontend signals
 6. **Value stress-test** — Non-optional. Not adversarial — helps PM sharpen pitch before leadership. 2-3 observations, not an interrogation

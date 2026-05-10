@@ -17,7 +17,7 @@ Public API:
 import argparse
 import sys
 
-from .common import (
+from common import (
     AzCliWrapper,
     ExitCode,
     handle_error,

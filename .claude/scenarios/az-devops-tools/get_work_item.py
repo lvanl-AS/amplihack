@@ -60,12 +60,17 @@ def get_work_item_details(
     Raises:
         SystemExit: If operation fails
     """
-    cmd = ["boards", "work-item", "show", "--id", str(work_item_id), "--output", "json"]
+    cmd = ["az", "boards", "work-item", "show", "--id", str(work_item_id), "--output", "json"]
+
+    if wrapper.org:
+        cmd.extend(["--org", wrapper.org])
+    if wrapper.project:
+        cmd.extend(["--project", wrapper.project])
 
     if fields:
         cmd.extend(["--fields", ",".join(fields)])
 
-    result = wrapper.devops_command(cmd, timeout=30)
+    result = wrapper.run(cmd, timeout=30)
 
     if not result.success:
         if "does not exist" in result.stderr.lower():
@@ -84,21 +89,20 @@ def get_work_item_details(
     try:
         work_item = json.loads(result.stdout)
 
-        # Get relations if requested
-        if include_relations:
-            relations_result = wrapper.devops_command(
-                [
-                    "boards",
-                    "work-item",
-                    "relation",
-                    "list-type",
-                    "--output",
-                    "json",
-                ],
-                timeout=30,
-            )
+        # Get relations if requested (use --expand on the main call instead)
+        if include_relations and "relations" not in work_item:
+            rel_cmd = ["az", "boards", "work-item", "show",
+                        "--id", str(work_item_id),
+                        "--expand", "relations",
+                        "--output", "json"]
+            if wrapper.org:
+                rel_cmd.extend(["--org", wrapper.org])
+            if wrapper.project:
+                rel_cmd.extend(["--project", wrapper.project])
+            relations_result = wrapper.run(rel_cmd, timeout=30)
             if relations_result.success:
-                work_item["relations"] = json.loads(relations_result.stdout)
+                rel_data = json.loads(relations_result.stdout)
+                work_item["relations"] = rel_data.get("relations", [])
 
         return work_item
     except (json.JSONDecodeError, KeyError) as e:
@@ -266,17 +270,17 @@ Examples:
     org = args.org or config.get("org")
     project = args.project or config.get("project")
 
-    if not org or not project:
+    if not org:
         handle_error(
-            "Organization and project must be configured",
+            "Organization must be configured",
             exit_code=ExitCode.CONFIG_ERROR,
-            details="Use 'az devops configure' or set AZURE_DEVOPS_ORG_URL and AZURE_DEVOPS_PROJECT environment variables",
+            details="Use --org, set AZURE_DEVOPS_ORG_URL or ADO_ORG environment variable, or run 'az devops configure'",
         )
 
     # Parse fields if provided
     fields = args.fields.split(",") if args.fields else None
 
-    # Create wrapper and get work item
+    # Create wrapper and get work item (project is optional for show)
     wrapper = AzCliWrapper(org=org, project=project)
 
     try:

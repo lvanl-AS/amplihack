@@ -5,7 +5,7 @@ author: "Amplihack Team"
 tags: ["ado", "tasks", "planning"]
 
 context:
-  workspace: ""
+  selected_workspace: ""
   work_item_id: ""
   auth_status: ""
   story_data: ""
@@ -17,11 +17,12 @@ context:
   user_approval: ""
 
 steps:
-  # Phase 1: Auth + fetch parent story
+  # Phase 1: Auth check against selected workspace
   - id: "auth-check"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/auth_check.py --quiet
+      python .claude/scenarios/az-devops-tools/auth_check.py \
+        --workspace "{{selected_workspace}}" --quiet
     output: "auth_status"
 
   - id: "fetch-parent-story"
@@ -29,7 +30,7 @@ steps:
     command: |
       python .claude/scenarios/az-devops-tools/get_work_item.py \
         --id {{work_item_id}} \
-        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --workspace "{{selected_workspace}}" \
         --relations --format json
     output: "story_data"
 
@@ -46,16 +47,7 @@ steps:
       Work item: {{story_data}}
     output: "parent_feature_context"
 
-  # Phase 2: Intro (shared sub-recipe)
-  - id: "intro"
-    type: "recipe"
-    recipe: "skill-intro"
-    sub_context:
-      skill_name: "Task Planner"
-      skill_description: "I help you break down a user story into actionable sprint tasks. I'll map each task to acceptance criteria, flag gaps in testing and observability, and create everything in ADO when you're ready."
-      what_i_need: "I'll be planning tasks for story #{{work_item_id}}"
-
-  # Phase 3: Decompose
+  # Phase 2: Decompose
   - id: "decompose"
     type: "agent"
     prompt: |

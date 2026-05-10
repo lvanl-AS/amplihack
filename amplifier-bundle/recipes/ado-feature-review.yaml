@@ -6,7 +6,7 @@ tags: ["ado", "review", "feature"]
 
 context:
   work_item_id: ""
-  workspace: ""
+  selected_workspace: ""
   feature_data: ""
   comments: ""
   revisions: ""
@@ -17,13 +17,13 @@ context:
   user_action: ""
 
 steps:
-  # Phase 1: Deterministic fetch
+  # Phase 2: Deterministic fetch
   - id: "fetch-feature"
     type: "bash"
     command: |
       python .claude/scenarios/az-devops-tools/get_work_item.py \
         --id {{work_item_id}} \
-        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --workspace "{{selected_workspace}}" \
         --relations --format json
     output: "feature_data"
 
@@ -32,7 +32,7 @@ steps:
     command: |
       python .claude/scenarios/az-devops-tools/get_comments.py \
         --id {{work_item_id}} \
-        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --workspace "{{selected_workspace}}" \
         --format json
     output: "comments"
 
@@ -41,7 +41,7 @@ steps:
     command: |
       python .claude/scenarios/az-devops-tools/get_revisions.py \
         --id {{work_item_id}} \
-        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --workspace "{{selected_workspace}}" \
         --format json
     output: "revisions"
 
@@ -49,7 +49,7 @@ steps:
     type: "bash"
     command: |
       python .claude/scenarios/az-devops-tools/query_wiql.py \
-        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --workspace "{{selected_workspace}}" \
         --wiql "SELECT [System.Id],[System.Title],[System.State] \
           FROM WorkItemLinks WHERE [Source].[System.Id] = {{work_item_id}} \
           AND [System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward' \
@@ -140,7 +140,7 @@ steps:
     condition: "'improve' in user_action.lower()"
     sub_context:
       work_item_id: "{{work_item_id}}"
-      workspace: "{{workspace}}"
+      selected_workspace: "{{selected_workspace}}"
       grade_card: "{{grade_card}}"
       grading_results: "{{grading_results}}"
 

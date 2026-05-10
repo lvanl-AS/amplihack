@@ -6,7 +6,7 @@ tags: ["ado", "review", "story"]
 
 context:
   work_item_id: ""
-  workspace: ""
+  selected_workspace: ""
   story_data: ""
   comments: ""
   revisions: ""
@@ -16,13 +16,13 @@ context:
   user_action: ""
 
 steps:
-  # Phase 1: Deterministic fetch (all bash — guaranteed execution)
+  # Phase 2: Deterministic fetch (all bash — guaranteed execution)
   - id: "fetch-story"
     type: "bash"
     command: |
       python .claude/scenarios/az-devops-tools/get_work_item.py \
         --id {{work_item_id}} \
-        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --workspace "{{selected_workspace}}" \
         --relations --format json
     output: "story_data"
 
@@ -31,7 +31,7 @@ steps:
     command: |
       python .claude/scenarios/az-devops-tools/get_comments.py \
         --id {{work_item_id}} \
-        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --workspace "{{selected_workspace}}" \
         --format json
     output: "comments"
 
@@ -40,7 +40,7 @@ steps:
     command: |
       python .claude/scenarios/az-devops-tools/get_revisions.py \
         --id {{work_item_id}} \
-        {{#workspace}}--workspace {{workspace}}{{/workspace}} \
+        --workspace "{{selected_workspace}}" \
         --format json
     output: "revisions"
 
@@ -122,7 +122,7 @@ steps:
     condition: "'improve' in user_action.lower()"
     sub_context:
       work_item_id: "{{work_item_id}}"
-      workspace: "{{workspace}}"
+      selected_workspace: "{{selected_workspace}}"
       grade_card: "{{grade_card}}"
       grading_results: "{{grading_results}}"
 

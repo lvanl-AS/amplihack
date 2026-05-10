@@ -19,7 +19,7 @@
       "mcp__ide__executeCode"
     ],
     "deny": [],
-    "defaultMode": "bypassPermissions",
+    "defaultMode": "default",
     "additionalDirectories": [
       ".claude",
       "Specs",

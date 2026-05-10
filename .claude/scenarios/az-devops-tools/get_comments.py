@@ -26,6 +26,7 @@ from typing import Any
 from common import (
     AzCliWrapper,
     ExitCode,
+    discover_project,
     handle_error,
     load_config,
     validate_work_item_id,
@@ -60,7 +61,8 @@ def get_comments(
     )
 
     result = wrapper.run(
-        ["az", "rest", "--method", "get", "--url", url],
+        ["az", "rest", "--method", "get", "--url", url,
+         "--resource", "499b84ac-1321-427f-aa17-267ca6975798"],
         timeout=30,
     )
 
@@ -137,12 +139,22 @@ def main() -> None:
     org = args.org or config.get("org")
     project = args.project or config.get("project")
 
-    if not org or not project:
+    if not org:
         handle_error(
-            "Organization and project must be configured",
+            "Organization must be configured",
             exit_code=ExitCode.CONFIG_ERROR,
-            details="Use --org/--project, environment variables, or az devops configure",
+            details="Use --org, set AZURE_DEVOPS_ORG_URL or ADO_ORG environment variable, or run 'az devops configure'",
         )
+
+    # Auto-discover project if not configured (comments API requires it)
+    if not project:
+        project = discover_project(org, work_item_id)
+        if not project:
+            handle_error(
+                "Project could not be determined for this work item",
+                exit_code=ExitCode.CONFIG_ERROR,
+                details="Use --project or set AZURE_DEVOPS_PROJECT environment variable",
+            )
 
     wrapper = AzCliWrapper(org=org, project=project)
 

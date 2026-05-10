@@ -6,12 +6,12 @@
       "args": [
         "-y",
         "@azure-devops/mcp",
-        "alaskaair",
+        "${ADO_ORG}",
         "-a", "pat",
         "-d", "core", "work-items", "repositories", "pipelines", "work", "search", "wiki", "test-plans"
       ],
       "env": {
-        "PERSONAL_ACCESS_TOKEN": "${PERSONAL_ACCESS_TOKEN}"
+        "AZURE_DEVOPS_EXT_PAT": "${AZURE_DEVOPS_EXT_PAT}"
       }
     },
     "workiq": {

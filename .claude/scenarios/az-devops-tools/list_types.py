@@ -22,7 +22,7 @@ import argparse
 import json
 import sys
 
-from .common import (
+from common import (
     AzCliWrapper,
     ExitCode,
     format_table,

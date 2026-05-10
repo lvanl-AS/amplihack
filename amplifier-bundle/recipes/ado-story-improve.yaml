@@ -10,7 +10,7 @@ tags: ["ado", "internal", "improve"]
 
 context:
   work_item_id: ""
-  workspace: ""
+  selected_workspace: ""
   grade_card: ""
   grading_results: ""
 
@@ -27,23 +27,99 @@ steps:
       echo "Context validated — review data present."
     output: "context_valid"
 
-  # Apply improvements based on review findings
+  # Draft improvements and write approved content to temp files
+  # Agent does NOT write to ADO — it writes to temp files only
   - id: "improve-story"
     type: "agent"
     prompt: |
-      Using the review findings, improve this story.
+      Using the review findings, draft improvements to this story.
 
       For each dimension graded below B:
-      - Draft specific improvements
-      - Show the before/after for each change
+      - Show the before/after for the specific field
       - Explain what was wrong and how the fix addresses it
 
-      Present all changes to the user for approval before writing to ADO.
+      Present all proposed changes to the user for approval.
+
+      Once the user approves (or requests edits), write the final approved content
+      to these temp files — HTML format for both:
+        /tmp/ado_story_{{work_item_id}}_description.html   (System.Description)
+        /tmp/ado_story_{{work_item_id}}_ac.html            (Microsoft.VSTS.Common.AcceptanceCriteria)
+
+      Only write the fields that actually changed. If a field is unchanged, do not
+      create its temp file — the bash commit step skips missing files.
+
+      Output a one-line summary of what was written, e.g.:
+        "Wrote: description, ac"
 
       Work item: #{{work_item_id}}
       Grade card: {{grade_card}}
       Grading details: {{grading_results}}
 
-      Use update_work_item.py to apply approved changes.
-      Multiple rounds of improvement are fine — loop until user is satisfied.
-    output: "improvements_applied"
+      Do NOT call any MCP tools or update_work_item.py directly.
+      The commit step handles all writes to ADO.
+    output: "improvements_staged"
+
+  # Deterministic commit — reads temp files and calls update_work_item.py
+  - id: "commit-improvements"
+    type: "bash"
+    command: |
+      DESC_FILE="/tmp/ado_story_{{work_item_id}}_description.html"
+      AC_FILE="/tmp/ado_story_{{work_item_id}}_ac.html"
+
+      if [ ! -f "$DESC_FILE" ] && [ ! -f "$AC_FILE" ]; then
+        echo "No changes staged — temp files not found. Nothing to commit."
+        exit 0
+      fi
+
+      ARGS=(--id {{work_item_id}} --workspace "{{selected_workspace}}")
+
+      if [ -f "$DESC_FILE" ]; then
+        DESCRIPTION=$(cat "$DESC_FILE")
+        ARGS+=(--description "$DESCRIPTION")
+      fi
+
+      if [ -f "$AC_FILE" ]; then
+        AC=$(cat "$AC_FILE")
+        ARGS+=(--field "Microsoft.VSTS.Common.AcceptanceCriteria=$AC")
+      fi
+
+      echo "Committing improvements to ADO work item #{{work_item_id}}..."
+      python .claude/scenarios/az-devops-tools/update_work_item.py "${ARGS[@]}"
+    output: "commit_result"
+
+  # Cleanup temp files
+  - id: "cleanup-temp"
+    type: "bash"
+    command: |
+      rm -f /tmp/ado_story_{{work_item_id}}_description.html
+      rm -f /tmp/ado_story_{{work_item_id}}_ac.html
+      echo "Temp files cleaned up."
+    output: "cleanup_done"
+
+  # Confirm what landed
+  - id: "verify-update"
+    type: "bash"
+    command: |
+      python .claude/scenarios/az-devops-tools/get_work_item.py \
+        --id {{work_item_id}} \
+        --workspace "{{selected_workspace}}" \
+        --fields "System.Title,System.Description,Microsoft.VSTS.Common.AcceptanceCriteria" \
+        --format json
+    output: "verified_state"
+
+  # Surface the result to the user
+  - id: "report"
+    type: "agent"
+    prompt: |
+      The improvements have been committed to ADO. Report the outcome to the user:
+
+      - Confirm which fields were updated (description, AC, or both)
+      - Show the commit result: {{commit_result}}
+      - Show a diff summary of key changes made vs. the original grade card findings
+      - Note any dimensions that still need attention if the user only approved partial changes
+
+      Commit result: {{commit_result}}
+      Verified state: {{verified_state}}
+      Improvements staged: {{improvements_staged}}
+      Grade card: {{grade_card}}
+    output: "report"

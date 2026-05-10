@@ -36,6 +36,17 @@ Activate when the user:
 - Says "create story", "new story", or "I need a story for..."
 - Has an idea they want to turn into a structured ADO work item
 
+## Execution
+
+Board selection runs before the recipe so the recipe runner never needs TTY access:
+
+```bash
+WORKSPACE=$(python .claude/scenarios/az-devops-tools/select_board.py)
+amplihack recipe run amplifier-bundle/recipes/ado-story-creation.yaml \
+  -c selected_workspace="$WORKSPACE" \
+  -c user_input="<user's story idea>"
+```
+
 ## Recipe
 
 This skill is driven by the `ado-story-creation` recipe.
@@ -43,8 +54,7 @@ This skill is driven by the `ado-story-creation` recipe.
 ## Workflow
 
 1. **Silent context** — Auth check + load story template
-2. **Intro** — Shared greeting sub-recipe (all ADO skills use this)
-3. **Duplicate detection** — WIQL search for similar stories, present if >70% match
+2. **Duplicate detection** — WIQL search for similar stories, present if >70% match
 4. **Parent feature resolution** — Find and understand the parent Feature. Unparented is fine. Attaching at save time without prior review requires explicit user override + audit comment
 5. **Figma check** — Conditional on frontend signals. Simple ask, sets flag for pre-save summary
 6. **Sequential draft** (order enforced by recipe runner):

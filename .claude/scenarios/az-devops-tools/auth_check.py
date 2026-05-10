@@ -25,7 +25,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-from .common import AzCliWrapper, ExitCode, load_config
+from common import AzCliWrapper, ExitCode, load_config
 
 
 @dataclass
@@ -360,46 +360,63 @@ Exit codes:
 
     parser.add_argument("--org", help="Azure DevOps organization URL")
     parser.add_argument("--project", help="Project name")
+    parser.add_argument("--workspace", help="Named workspace alias from ~/.azure-devops-tools.json")
     parser.add_argument(
         "--auto-fix",
         action="store_true",
         help="Attempt to automatically fix issues",
     )
     parser.add_argument("--config", help="Config file path")
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress status output; only print errors",
+    )
 
     args = parser.parse_args()
 
+    # Resolve org/project: workspace alias > explicit args > None (check_auth will try env/config)
+    org = args.org
+    project = args.project
+    if args.workspace:
+        ws_config = load_config(workspace=args.workspace)
+        org = org or ws_config.get("org")
+        project = project or ws_config.get("project")
+
     # Load config and check auth
-    print("Checking Azure DevOps authentication...\n")
-    status = check_auth(org=args.org, project=args.project)
+    if not args.quiet:
+        print("Checking Azure DevOps authentication...\n")
+    status = check_auth(org=org, project=project)
 
     # Print status
-    print("Status:")
-    print("  ✓ Azure CLI installed" if status.az_cli_installed else "  ✗ Azure CLI NOT installed")
-    print("  ✓ Logged in" if status.logged_in else "  ✗ NOT logged in")
-    print(
-        "  ✓ DevOps extension installed"
-        if status.devops_extension_installed
-        else "  ✗ DevOps extension NOT installed"
-    )
-    print(
-        "  ✓ Organization configured"
-        if status.org_configured
-        else "  ✗ Organization NOT configured"
-    )
-    print("  ✓ Project configured" if status.project_configured else "  ✗ Project NOT configured")
-    print(
-        "  ✓ Organization accessible"
-        if status.org_accessible
-        else "  ✗ Organization NOT accessible"
-    )
-    print("  ✓ Project accessible" if status.project_accessible else "  ✗ Project NOT accessible")
+    if not args.quiet:
+        print("Status:")
+        print("  ✓ Azure CLI installed" if status.az_cli_installed else "  ✗ Azure CLI NOT installed")
+        print("  ✓ Logged in" if status.logged_in else "  ✗ NOT logged in")
+        print(
+            "  ✓ DevOps extension installed"
+            if status.devops_extension_installed
+            else "  ✗ DevOps extension NOT installed"
+        )
+        print(
+            "  ✓ Organization configured"
+            if status.org_configured
+            else "  ✗ Organization NOT configured"
+        )
+        print("  ✓ Project configured" if status.project_configured else "  ✗ Project NOT configured")
+        print(
+            "  ✓ Organization accessible"
+            if status.org_accessible
+            else "  ✗ Organization NOT accessible"
+        )
+        print("  ✓ Project accessible" if status.project_accessible else "  ✗ Project NOT accessible")
 
     # Print errors
     if status.errors:
-        print("\nErrors:")
+        if not args.quiet:
+            print("\nErrors:")
         for error in status.errors:
-            print(f"  - {error}")
+            print(f"  - {error}", file=sys.stderr)
 
     # Auto-fix if requested
     if args.auto_fix and not status.is_ready:
@@ -409,7 +426,7 @@ Exit codes:
 
         # Re-check after auto-fix
         print("\nRe-checking authentication after auto-fix...\n")
-        status = check_auth(org=args.org, project=args.project)
+        status = check_auth(org=org, project=project)
 
         print("Updated Status:")
         print(
@@ -446,12 +463,14 @@ Exit codes:
 
     # Final result
     if status.is_ready:
-        print("\n✓ Authentication is ready!")
+        if not args.quiet:
+            print("\n✓ Authentication is ready!")
         sys.exit(ExitCode.SUCCESS)
     else:
-        print("\n✗ Authentication is NOT ready")
-        if not args.auto_fix:
-            print("\nTip: Run with --auto-fix to attempt automatic fixes")
+        if not args.quiet:
+            print("\n✗ Authentication is NOT ready")
+            if not args.auto_fix:
+                print("\nTip: Run with --auto-fix to attempt automatic fixes")
         sys.exit(ExitCode.AUTH_ERROR if not status.logged_in else ExitCode.CONFIG_ERROR)
 
 

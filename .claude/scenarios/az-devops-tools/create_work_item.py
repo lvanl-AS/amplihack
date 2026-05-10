@@ -22,13 +22,13 @@ Public API:
 import argparse
 import sys
 
-from .common import (
+from common import (
     AzCliWrapper,
     ExitCode,
     handle_error,
     load_config,
 )
-from .format_html import markdown_to_html
+from format_html import markdown_to_html
 
 
 def validate_work_item_type(work_item_type: str, org: str, project: str) -> bool:
@@ -160,7 +160,7 @@ def create_work_item(
     if parent_id:
         try:
             # Use link_parent tool to create link
-            from .link_parent import link_parent
+            from link_parent import link_parent
 
             link_parent(
                 child_id=work_item_id,

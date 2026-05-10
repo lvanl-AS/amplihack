@@ -33,6 +33,17 @@ Activate when the user:
 - Says "plan tasks for #12345" or "decompose this story"
 - Needs to create implementation tasks for a story
 
+## Execution
+
+Board selection runs before the recipe so the recipe runner never needs TTY access:
+
+```bash
+WORKSPACE=$(python .claude/scenarios/az-devops-tools/select_board.py)
+amplihack recipe run amplifier-bundle/recipes/ado-task-planning.yaml \
+  -c selected_workspace="$WORKSPACE" \
+  -c work_item_id="<story ID>"
+```
+
 ## Recipe
 
 This skill is driven by the `ado-task-planning` recipe.
@@ -41,8 +52,7 @@ This skill is driven by the `ado-task-planning` recipe.
 
 1. **Auth + fetch** — Verify auth, fetch parent story with relations
 2. **Validate parent type** — Must be a User Story. If Feature/Bug/Epic, redirect: "Tasks live under stories. Want to find a story under this, or create one with ado-story-creation?"
-3. **Intro** — Shared greeting sub-recipe
-4. **Decompose** — 4-8 tasks, each with action-oriented title, 1-3 line description, AC mapping
+3. **Decompose** — 4-8 tasks, each with action-oriented title, 1-3 line description, AC mapping
 5. **Anti-pattern critique** — Flags missing testing/observability/rollout tasks. High-level only, advisory
 6. **Iterate with user** — Split, merge, add, drop, retitle tasks
 7. **Sprint placement** — Agent uses MCP `work_list_team_iterations` for iteration options. Defaults to parent story's iteration

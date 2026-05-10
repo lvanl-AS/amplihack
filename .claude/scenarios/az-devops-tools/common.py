@@ -141,6 +141,49 @@ class AzCliWrapper:
         return self.run(command, timeout=timeout)
 
 
+def _load_dotenv() -> None:
+    """Load .env file into os.environ without overriding existing vars.
+
+    Searches current directory, then walks up from the script location
+    (up to 5 levels) to find a .env file. Only sets variables not already
+    present in the environment. Never logs or prints values.
+    """
+    candidates = [Path.cwd()]
+    script_dir = Path(__file__).resolve().parent
+    for _ in range(5):
+        candidates.append(script_dir)
+        script_dir = script_dir.parent
+
+    env_path = None
+    for candidate in candidates:
+        p = candidate / ".env"
+        if p.is_file():
+            env_path = p
+            break
+
+    if not env_path:
+        return
+
+    try:
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            # Strip surrounding quotes
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                value = value[1:-1]
+            # Never override real environment variables
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except OSError:
+        pass  # Silent — env vars or config file will be tried next
+
+
 def load_config(
     config_file: str | None = None,
     workspace: str | None = None,
@@ -148,10 +191,11 @@ def load_config(
     """Load Azure DevOps configuration.
 
     Loads from (in priority order):
-    1. Named workspace in config file (~/.azure-devops-tools.json)
-    2. Flat config file values
-    3. Environment variables (AZURE_DEVOPS_ORG_URL, AZURE_DEVOPS_PROJECT)
-    4. az devops configure --list output
+    1. .env file (loaded into env without overriding existing vars)
+    2. Named workspace in config file (~/.azure-devops-tools.json)
+    3. Flat config file values
+    4. Environment variables (AZURE_DEVOPS_ORG_URL or ADO_ORG, AZURE_DEVOPS_PROJECT)
+    5. az devops configure --list output
 
     Args:
         config_file: Path to JSON config file (optional, defaults to ~/.azure-devops-tools.json)
@@ -160,6 +204,7 @@ def load_config(
     Returns:
         Dictionary with org, project, and optionally area_path keys
     """
+    _load_dotenv()
     config = {}
     default_config_path = Path.home() / ".azure-devops-tools.json"
 
@@ -196,10 +241,16 @@ def load_config(
     # Override with environment variables
     if org := os.getenv("AZURE_DEVOPS_ORG_URL"):
         config["org"] = org
+    elif ado_org := os.getenv("ADO_ORG"):
+        # ADO_ORG is the org slug (e.g. "itsals"), convert to full URL
+        if not ado_org.startswith("http"):
+            config["org"] = f"https://dev.azure.com/{ado_org}"
+        else:
+            config["org"] = ado_org
     if project := os.getenv("AZURE_DEVOPS_PROJECT"):
         config["project"] = project
 
-    # Try az devops configure if still missing
+    # Try az devops configure if org or project still missing
     if not config.get("org") or not config.get("project"):
         try:
             wrapper = AzCliWrapper()
@@ -219,6 +270,33 @@ def load_config(
             pass  # Fall through to return partial config
 
     return config
+
+
+def discover_project(org: str, work_item_id: int) -> str | None:
+    """Discover the project for a work item by fetching its metadata.
+
+    Args:
+        org: Organization URL (e.g. https://dev.azure.com/itsals)
+        work_item_id: Work item ID
+
+    Returns:
+        Project name or None if discovery fails
+    """
+    wrapper = AzCliWrapper()
+    result = wrapper.run(
+        ["az", "boards", "work-item", "show",
+         "--id", str(work_item_id),
+         "--org", org,
+         "--output", "json"],
+        timeout=30,
+    )
+    if result.success:
+        try:
+            data = json.loads(result.stdout)
+            return data.get("fields", {}).get("System.TeamProject")
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return None
 
 
 def handle_error(
@@ -295,6 +373,7 @@ __all__ = [
     "AzCliWrapper",
     "CommandResult",
     "ExitCode",
+    "discover_project",
     "load_config",
     "handle_error",
     "validate_work_item_id",
