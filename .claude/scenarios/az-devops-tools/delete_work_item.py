@@ -47,8 +47,8 @@ def get_work_item_info(wrapper: AzCliWrapper, work_item_id: int) -> dict | None:
     Returns:
         Work item data or None if not found
     """
-    result = wrapper.devops_command(
-        ["boards", "work-item", "show", "--id", str(work_item_id), "--output", "json"],
+    result = wrapper.boards_command(
+        ["work-item", "show", "--id", str(work_item_id), "--output", "json"],
         timeout=30,
     )
 
@@ -75,14 +75,14 @@ def delete_work_item(wrapper: AzCliWrapper, work_item_id: int, permanent: bool =
     Raises:
         SystemExit: If operation fails
     """
-    cmd = ["boards", "work-item", "delete", "--id", str(work_item_id)]
+    cmd = ["work-item", "delete", "--id", str(work_item_id)]
 
     if permanent:
         cmd.append("--destroy")
 
     cmd.append("--yes")  # Skip az CLI confirmation
 
-    result = wrapper.devops_command(cmd, timeout=30)
+    result = wrapper.boards_command(cmd, timeout=30)
 
     if not result.success:
         if "does not exist" in result.stderr.lower():

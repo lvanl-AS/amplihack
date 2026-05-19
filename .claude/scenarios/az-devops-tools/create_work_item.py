@@ -44,8 +44,16 @@ def validate_work_item_type(work_item_type: str, org: str, project: str) -> bool
     """
     try:
         wrapper = AzCliWrapper(org=org, project=project)
-        result = wrapper.devops_command(
-            ["work-item", "type", "list"],
+        result = wrapper.run(
+            [
+                "az", "devops", "invoke",
+                "--area", "wit",
+                "--resource", "workitemtypes",
+                "--org", org,
+                "--route-parameters", f"project={project}",
+                "--api-version", "7.0",
+                "-o", "json",
+            ],
             timeout=15,
         )
 
@@ -139,7 +147,7 @@ def create_work_item(
             command_args.extend(["--fields", f"{field}={value}"])
 
     # Execute creation
-    result = wrapper.devops_command(
+    result = wrapper.boards_command(
         ["work-item", "create"] + command_args,
         timeout=30,
     )

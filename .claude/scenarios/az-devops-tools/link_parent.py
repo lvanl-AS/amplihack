@@ -39,7 +39,7 @@ def work_item_exists(work_item_id: int, org: str, project: str) -> bool:
     """
     try:
         wrapper = AzCliWrapper(org=org, project=project)
-        result = wrapper.devops_command(
+        result = wrapper.boards_command(
             ["work-item", "show", "--id", str(work_item_id)],
             timeout=15,
         )
@@ -61,7 +61,7 @@ def get_work_item_type(work_item_id: int, org: str, project: str) -> str | None:
     """
     try:
         wrapper = AzCliWrapper(org=org, project=project)
-        result = wrapper.devops_command(
+        result = wrapper.boards_command(
             ["work-item", "show", "--id", str(work_item_id)],
             timeout=15,
         )
@@ -155,7 +155,7 @@ def link_parent(
 
     # Create link
     wrapper = AzCliWrapper(org=org, project=project)
-    result = wrapper.devops_command(
+    result = wrapper.boards_command(
         [
             "work-item",
             "relation",

@@ -1,0 +1,146 @@
+# Section profiles for ado-story-creation
+# Maps template section keys to specialized drafting instructions.
+#
+# Used by the map-sections-to-agents step to create a dispatch plan.
+# When a template section has no exact key match, the agent fuzzy-matches
+# against these profiles and adapts the closest match's conventions.
+#
+# Profiles are written for User Story templates but the dynamic dispatch
+# system handles other types (Bug, Non-Audit, etc.) via fuzzy matching
+# and generic fallback. Add type-specific profiles as patterns emerge.
+#
+# Sections marked preserve: true are team checklists — copied verbatim
+# from the template, never drafted or modified.
+
+profiles:
+  # --- System.Description sections ---
+
+  # Connextra preamble — assembled from Phase 1/2 outputs, not drafted
+  preamble:
+    field: "System.Description"
+    source: "phase2_connextra"
+    description: "As a [persona], I want [capability], so that [benefit]"
+    conventions:
+      - "Assembled from identify-persona + understand-story outputs"
+      - "Never mention Connextra or INVEST by name"
+      - "Plain English, user's perspective"
+
+  context_assumptions:
+    field: "System.Description"
+    agent: "amplihack:ado-story-architect"
+    description: "Context, assumptions, and scope boundaries"
+    conventions:
+      - "In scope / out of scope where helpful"
+      - "Call out assumptions that could invalidate the story"
+      - "Reference parent feature context for inherited constraints"
+
+  design_needed:
+    field: "System.Description"
+    description: "Whether design work is required"
+    conventions:
+      - "Yes/No with brief justification"
+      - "Reference Figma link if available"
+      - "If no design needed, say so explicitly"
+
+  dependencies:
+    field: "System.Description"
+    description: "External dependencies or blockers"
+    conventions:
+      - "Other teams, APIs, infrastructure, data migrations"
+      - "If none, say 'No external dependencies identified'"
+
+  testing:
+    field: "System.Description"
+    agent: "amplihack:ado-story-architect"
+    description: "Testing approach and considerations"
+    conventions:
+      - "Types of testing needed (unit, integration, E2E, manual)"
+      - "Specific test environments or data requirements"
+      - "Edge cases worth calling out"
+
+  # Team checklists — preserved from template verbatim
+  dor_reminders:
+    field: "System.Description"
+    preserve: true
+    description: "Definition of Ready checklist (team standard)"
+
+  dod_reminders:
+    field: "System.Description"
+    preserve: true
+    description: "Definition of Done checklist (team standard)"
+
+  # --- AcceptanceCriteria sections ---
+
+  outcome:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    agent: "amplihack:ado-story-architect"
+    description: "Business outcome this story contributes to"
+    conventions:
+      - "Traces to parent feature's outcome"
+      - "Scoped to this story's contribution, not the whole feature"
+      - "Single clear statement"
+
+  additional_context:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    agent: "amplihack:ado-story-architect"
+    description: "Testable acceptance criteria"
+    conventions:
+      - "Given/When/Then format"
+      - "3-5 criteria minimum"
+      - "At least one unhappy path / error scenario"
+      - "Each must trace to description"
+      - "No implementation specifics"
+
+  # Release readiness and other AC checklists — preserved
+  release_readiness:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    preserve: true
+    description: "Release Readiness checklist (team standard)"
+
+  guest_impact:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    preserve: true
+    description: "Guest impact assessment checklist"
+
+  systems_touched:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    preserve: true
+    description: "Systems touched checklist"
+
+  end-to-end_validation:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    preserve: true
+    description: "End-to-end validation checklist"
+
+  regression_coverage:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    preserve: true
+    description: "Regression coverage checklist"
+
+  failure_scenarios:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    preserve: true
+    description: "Failure scenarios checklist"
+
+  production_detection:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    preserve: true
+    description: "Production detection checklist"
+
+  rollback_/_mitigation:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    preserve: true
+    description: "Rollback/mitigation checklist"
+
+  post-release_monitoring:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    preserve: true
+    description: "Post-release monitoring checklist"
+
+# Fallback for sections that don't match any profile (exact or fuzzy).
+generic_prompt: |
+  Fill the '{header}' section for this work item.
+  Write for a PM/dev audience — clear, concrete, actionable.
+  Do not prescribe implementation details or specific technical solutions.
+  Base your content on the story brief, persona, and done criteria.
+  Reference the parent feature context where relevant.

@@ -45,8 +45,16 @@ def list_types(org: str, project: str) -> list[dict]:
         RuntimeError: If listing fails
     """
     wrapper = AzCliWrapper(org=org, project=project)
-    result = wrapper.devops_command(
-        ["work-item", "type", "list"],
+    result = wrapper.run(
+        [
+            "az", "devops", "invoke",
+            "--area", "wit",
+            "--resource", "workitemtypes",
+            "--org", org,
+            "--route-parameters", f"project={project}",
+            "--api-version", "7.0",
+            "-o", "json",
+        ],
         timeout=15,
     )
 
@@ -75,8 +83,16 @@ def get_type_fields(work_item_type: str, org: str, project: str) -> dict | None:
         RuntimeError: If query fails
     """
     wrapper = AzCliWrapper(org=org, project=project)
-    result = wrapper.devops_command(
-        ["work-item", "type", "show", "--name", work_item_type],
+    result = wrapper.run(
+        [
+            "az", "devops", "invoke",
+            "--area", "wit",
+            "--resource", "workitemtypes",
+            "--org", org,
+            "--route-parameters", f"project={project}", f"type={work_item_type}",
+            "--api-version", "7.0",
+            "-o", "json",
+        ],
         timeout=15,
     )
 

@@ -35,10 +35,11 @@ Activate when the user:
 
 ## Execution
 
-Board selection runs before the recipe so the recipe runner never needs TTY access:
+Board selection runs before the recipe so the recipe runner never needs TTY access.
 
 ```bash
 WORKSPACE=$(python .claude/scenarios/az-devops-tools/select_board.py)
+
 amplihack recipe run amplifier-bundle/recipes/ado-task-planning.yaml \
   -c selected_workspace="$WORKSPACE" \
   -c work_item_id="<story ID>"

@@ -119,8 +119,11 @@ class AzCliWrapper:
     ) -> CommandResult:
         """Execute az devops command with default org/project.
 
+        Use for organization-level commands: project list, configure, wiki, etc.
+        For work items and boards operations, use boards_command() instead.
+
         Args:
-            subcommand: Devops subcommand (e.g., ["work-item", "create"])
+            subcommand: Devops subcommand (e.g., ["project", "list"])
             additional_args: Additional arguments
             timeout: Command timeout
 
@@ -130,6 +133,37 @@ class AzCliWrapper:
         command = ["az", "devops"] + subcommand
 
         # Add default org/project if set
+        if self.org:
+            command.extend(["--org", self.org])
+        if self.project:
+            command.extend(["--project", self.project])
+
+        if additional_args:
+            command.extend(additional_args)
+
+        return self.run(command, timeout=timeout)
+
+    def boards_command(
+        self,
+        subcommand: list[str],
+        additional_args: list[str] | None = None,
+        timeout: int = 30,
+    ) -> CommandResult:
+        """Execute az boards command with default org/project.
+
+        Use for work item operations: query, work-item show/create/update/delete,
+        work-item relation, area, iteration.
+
+        Args:
+            subcommand: Boards subcommand (e.g., ["work-item", "show", "--id", "123"])
+            additional_args: Additional arguments
+            timeout: Command timeout
+
+        Returns:
+            CommandResult with execution details
+        """
+        command = ["az", "boards"] + subcommand
+
         if self.org:
             command.extend(["--org", self.org])
         if self.project:

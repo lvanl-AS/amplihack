@@ -1,0 +1,113 @@
+# Section profiles for ado-feature-creation
+# Maps template section keys to specialized drafting instructions.
+#
+# Used by the map-sections-to-agents step to create a dispatch plan.
+# When a template section has no exact key match, the agent fuzzy-matches
+# against these profiles and adapts the closest match's conventions.
+#
+# Adding a new section:
+#   1. Run fill_template.py --list-sections on your template to get the key
+#   2. Add a profile entry below with agent, description, and conventions
+#   3. Sections without a profile still get drafted via generic_prompt
+
+profiles:
+  # --- System.Description sections ---
+  what:
+    field: "System.Description"
+    agent: "amplihack:ado-feature-author"
+    description: "Problem statement or desired outcome"
+    conventions:
+      - "Outcome-oriented, not solution-oriented"
+      - "No implementation details or specific repos"
+      - "Clear, concise problem statement"
+
+  why:
+    field: "System.Description"
+    agent: "amplihack:ado-feature-author"
+    description: "Value justification"
+    conventions:
+      - "MUST use Without/With contrast framing (team convention)"
+      - "Show what the world looks like without this vs. with it"
+      - "Use **bold** markdown for Without/With headers"
+
+  who:
+    field: "System.Description"
+    source: "phase1_stakeholders"
+    description: "Stakeholders and beneficiaries"
+    conventions:
+      - "Filled from Phase 1 identify-stakeholders output — not drafted independently"
+      - "Cover: who benefits, stakeholders, users"
+
+  guest_wins:
+    field: "System.Description"
+    agent: "amplihack:ado-feature-author"
+    description: "What guests/customers get out of this"
+    conventions:
+      - "At least one bullet point"
+      - "Concrete and specific, not aspirational"
+      - "Write from the guest's perspective"
+
+  business_wins:
+    field: "System.Description"
+    agent: "amplihack:ado-feature-author"
+    description: "What the business gets"
+    conventions:
+      - "At least one bullet point"
+      - "Tie to revenue, cost reduction, or strategic position"
+      - "Quantify where possible using seed outcome"
+
+  tech_wins:
+    field: "System.Description"
+    agent: "amplihack:ado-feature-author"
+    description: "What the tech org gets"
+    conventions:
+      - "At least one bullet point"
+      - "Maintainability, reliability, developer experience"
+      - "Platform health, not just feature delivery"
+
+  quality_measure_ac:
+    field: "System.Description"
+    agent: "amplihack:ado-feature-author"
+    description: "Quality guardrails"
+    conventions:
+      - "These are GUARDRAILS, not success metrics"
+      - "Format: 'no increase in X', 'no degradation in Y'"
+      - "Protect against unintended harm"
+      - "Not the same as acceptance criteria"
+
+  additional_considerations:
+    field: "System.Description"
+    description: "Design refs, risks, testing notes, dependencies"
+    conventions:
+      - "Include figma/design references if available"
+      - "Flag known risks or dependencies"
+      - "Cross-references to related features or initiatives"
+
+  # --- AcceptanceCriteria sections ---
+  outcome:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    agent: "amplihack:ado-feature-author"
+    description: "Business outcome the feature accomplishes"
+    conventions:
+      - "Single clear outcome statement"
+      - "Must trace back to WHY section"
+      - "Describes the end state, not the path"
+
+  additional_context:
+    field: "Microsoft.VSTS.Common.AcceptanceCriteria"
+    agent: "amplihack:ado-feature-author"
+    description: "Testable requirements"
+    conventions:
+      - "Numbered list"
+      - "Each item must be demo-able"
+      - "Must trace to description sections"
+      - "No implementation specifics"
+
+# Fallback for sections that don't match any profile (exact or fuzzy).
+# The drafting agent uses this prompt template, replacing {header} with
+# the actual section header text from the template.
+generic_prompt: |
+  Fill the '{header}' section for this feature.
+  Write for a PM audience — clear, concrete, leadership-defensible.
+  Do not prescribe implementation details or specific technical solutions.
+  Base your content on the feature brief, stakeholders, and seed outcome.

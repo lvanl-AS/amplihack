@@ -106,21 +106,25 @@ def execute_wiql(
     wrapper = AzCliWrapper(org=org, project=project)
 
     # Execute query
-    result = wrapper.devops_command(
-        ["work-item", "query", "--wiql", wiql],
+    result = wrapper.boards_command(
+        ["query", "--wiql", wiql],
         timeout=30,
     )
 
     if not result.success:
         raise RuntimeError(f"Failed to execute query: {result.stderr}")
 
-    # Parse results
+    # Parse results — az boards query returns a flat list of work items
     data = result.json_output
     if not data:
         return []
 
-    # Get work item IDs from query result
-    work_items = data.get("workItems", [])
+    # Handle both formats: flat list (az boards query) or {"workItems": [...]}
+    if isinstance(data, list):
+        work_items = data
+    else:
+        work_items = data.get("workItems", [])
+
     if not work_items:
         return []
 
@@ -128,23 +132,8 @@ def execute_wiql(
     if limit and limit > 0:
         work_items = work_items[:limit]
 
-    # Fetch full work item details
-    work_item_details = []
-    for item in work_items:
-        item_id = item.get("id")
-        if not item_id:
-            continue
-
-        # Get work item details
-        detail_result = wrapper.devops_command(
-            ["work-item", "show", "--id", str(item_id)],
-            timeout=15,
-        )
-
-        if detail_result.success and detail_result.json_output:
-            work_item_details.append(detail_result.json_output)
-
-    return work_item_details
+    # az boards query returns full work item data — no need for individual show calls
+    return work_items
 
 
 def format_work_items(

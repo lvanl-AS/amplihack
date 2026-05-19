@@ -197,9 +197,8 @@ def check_project_access(org: str, project: str) -> tuple[bool, str | None]:
     """
     try:
         wrapper = AzCliWrapper(org=org, project=project)
-        result = wrapper.devops_command(
+        result = wrapper.boards_command(
             [
-                "work-item",
                 "query",
                 "--wiql",
                 "SELECT [System.Id] FROM workitems WHERE [System.TeamProject] = @project",

@@ -1,296 +1,687 @@
 name: "ado-story-creation"
-description: "Conversational story creation with sequential drafting and quality gates"
-version: "1.0.0"
+description: "Conversational work item creation with dynamic template drafting, coherence testing, and flexible type selection"
+version: "2.0.0"
 author: "Amplihack Team"
-tags: ["ado", "create", "story"]
+tags: ["ado", "create", "story", "bug"]
 
 context:
+  # Inputs
   selected_workspace: ""
-  auth_status: ""
-  story_template: ""
   user_input: ""
-  topic_keywords: ""
-  duplicate_candidates: ""
-  parent_feature_context: ""
-  parent_feature_id: ""
+  # Phase 1: Context
+  auth_status: ""
+  story_brief: ""
   has_frontend_signals: "false"
-  figma_context: ""
-  story_description: ""
-  acceptance_criteria: ""
-  outcome_metrics: ""
+  parent_feature_context: ""
+  work_item_type: ""
+  # Phase 2: Template + Deeper Understanding
+  story_template: ""
+  discovered_sections: ""
+  persona: ""
+  done_criteria: ""
+  dispatch_plan: ""
+  # Phase 3: Parallel Drafting
+  drafted_sections: ""
   okr_alignment: ""
-  story_title: ""
+  # Phase 4: Quality Gates
+  tech_guard_result: ""
+  coherence_result: ""
+  outcome_metrics: ""
+  selected_lenses: ""
+  lawyer_perspective: ""
+  economist_perspective: ""
+  anthropologist_perspective: ""
+  psychologist_perspective: ""
+  analyst_summary: ""
+  # Phase 5: User Review + Late Checks
   revised_draft: ""
-  validation_result: ""
-  final_draft: ""
-  pre_commit_review: ""
+  story_title: ""
+  duplicate_candidates: ""
+  duplicate_decision: ""
+  figma_context: ""
+  # Phase 6: Save
   user_save_decision: ""
+  manifest_prepared: ""
+  template_filled: ""
+  created_work_item: ""
+  warnings_posted: ""
+  cleanup_done: ""
+  reflection: ""
 
 steps:
-  # Phase 1: Auth check against selected workspace
+  # =========================================================================
+  # Phase 1: CONTEXT
+  # Foundational decisions before anything else: what is this, where does
+  # it live, what type is it.
+  # =========================================================================
+
   - id: "auth-check"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/auth_check.py \
+      python3 .claude/scenarios/az-devops-tools/auth_check.py \
         --workspace "{{selected_workspace}}" --quiet
     output: "auth_status"
+
+  - id: "understand-story"
+    type: "agent"
+    prompt: |
+      Have a conversation with the user to understand what they want to build.
+      You are NOT drafting anything yet — just building understanding.
+
+      Start from their initial input and explore:
+      - What is the capability or change needed?
+      - Why does it matter? What problem does it solve?
+      - Any constraints or context they already know?
+
+      Keep it natural. 2-3 questions max. Don't interrogate.
+
+      Output a structured story brief: a concise summary of what needs
+      to be done and why.
+
+      User's initial input: {{user_input}}
+    output: "story_brief"
+
+  - id: "detect-frontend-signals"
+    type: "agent"
+    prompt: |
+      Based on the story brief, does this involve UI or frontend work?
+
+      Signals: pages, screens, buttons, forms, modals, layouts, components,
+      mobile, responsive, design, navigation, user-facing display changes.
+
+      Output ONLY "true" or "false".
+
+      Story brief: {{story_brief}}
+    output: "has_frontend_signals"
+
+  - id: "resolve-parent-feature"
+    type: "agent"
+    prompt: |
+      Ask the user directly:
+      "Do you know what parent feature this goes under? If not, we can
+      try to find it for you."
+
+      If user provided a work item ID: fetch it with get_work_item.py.
+      If they named a feature: search via MCP.
+      If they're not sure: search for likely parent features based on the
+      story brief and present the top matches as options.
+      If no parent: "No parent feature? That's fine — standalone stories
+      are valid. You can attach to a feature later."
+
+      If a parent is confirmed: read the FULL feature — description, AC,
+      metrics, existing children. This context shapes everything downstream.
+
+      Story brief: {{story_brief}}
+    output: "parent_feature_context"
+
+  - id: "select-work-item-type"
+    type: "agent"
+    prompt: |
+      Based on the story brief and conversation so far, help the user
+      select the right work item type.
+
+      Ask: "What type of work item should this be?"
+
+      Present the common options:
+      - **User Story** — new capability or enhancement from a user's perspective
+      - **Bug** — defect or regression in existing behavior
+      - **Non-Audit** — operational work, tech debt, or internal improvements
+
+      If the story brief strongly suggests one type (e.g., user described a
+      defect → suggest Bug), lead with that suggestion but let the user decide.
+
+      Output ONLY the selected type name exactly as ADO uses it:
+      "User Story", "Bug", or the specific type name.
+
+      Story brief: {{story_brief}}
+      Parent feature: {{parent_feature_context}}
+    output: "work_item_type"
+
+  # =========================================================================
+  # Phase 2: TEMPLATE + DEEPER UNDERSTANDING
+  # Load the right template based on selected type, discover its sections,
+  # then ask the deeper questions that inform drafting.
+  # =========================================================================
 
   - id: "load-template"
     type: "bash"
     command: |
-      cat amplifier-bundle/skills/common/templates/reference_alaska_story_template.md
+      python3 .claude/scenarios/az-devops-tools/get_templates.py \
+        --type "{{work_item_type}}" \
+        --workspace "{{selected_workspace}}" \
+        --fields-only \
+        | tee /tmp/ado_story_template.json
     output: "story_template"
 
-  # Phase 2: Extract keywords + detect signals
-  - id: "extract-keywords"
-    type: "agent"
-    prompt: |
-      From the user's input, extract:
-      1. Search keywords for duplicate detection (2-4 key terms)
-      2. Whether this sounds like a frontend story (UI, page, button, screen,
-         layout, component, mobile, responsive, design, modal, dropdown, form)
-
-      Set has_frontend_signals to "true" or "false".
-
-      User input: {{user_input}}
-    output: "topic_keywords"
-
-  # Phase 2c: Duplicate detection
-  - id: "duplicate-search"
+  - id: "discover-sections"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/query_wiql.py \
-        --workspace "{{selected_workspace}}" \
-        --wiql "SELECT [System.Id],[System.Title],[System.State] \
-          FROM WorkItems WHERE [System.WorkItemType] = 'User Story' \
-          AND [System.Title] CONTAINS '{{topic_keywords}}'" \
-        --format json
-    output: "duplicate_candidates"
+      python3 .claude/scenarios/az-devops-tools/fill_template.py \
+        --template-file /tmp/ado_story_template.json \
+        --list-sections
+    output: "discovered_sections"
 
-  # Phase 2d: Evaluate duplicates
-  - id: "evaluate-duplicates"
+  - id: "identify-persona"
     type: "agent"
     prompt: |
-      Check search results for potential duplicates of the user's topic.
-      If >70% similar: present to user, ask "update existing or create new?"
-      If 40-70%: mention as context, continue.
-      If no matches: continue silently.
+      Ask the user:
+      "Who is the user performing this action? Not who owns the work —
+      who is the person whose experience changes?"
 
-      Candidates: {{duplicate_candidates}}
-      User's topic: {{user_input}}
-    output: "duplicate_decision"
+      This persona feeds directly into the story format
+      ("As a [persona], I want [capability], so that [benefit]").
 
-  # Phase 3: Parent feature resolution
-  - id: "resolve-parent-feature"
+      NEVER invent persona names. Always ask.
+      The parent feature context may hint at the persona — reference it
+      if helpful, but confirm with the user.
+
+      Story brief: {{story_brief}}
+      Parent feature: {{parent_feature_context}}
+    output: "persona"
+
+  - id: "seed-done-criteria"
     type: "agent"
     prompt: |
-      Determine the parent Feature for this story.
+      Ask the user:
+      "What does done look like for this? Just the gist — we'll write
+      formal acceptance criteria later."
 
-      User's topic: {{user_input}}
+      This is a lightweight ask. The user likely has a sense of what
+      success looks like even if it's not formalized. Capture whatever
+      they give, even if rough. If they're not sure, that's fine —
+      note it and move on.
 
-      If user provided a work item ID, fetch it with get_work_item.py.
-      If they mentioned a feature name, search via MCP.
-      If neither, search for likely parents and present options.
-      If no parent: "No parent feature? That's fine — standalone stories
-      and bugs are valid. You can create a feature later with ado-feature-creation."
+      Story brief: {{story_brief}}
+      Persona: {{persona}}
+      Parent feature: {{parent_feature_context}}
+    output: "done_criteria"
 
-      If a parent is confirmed: read the FULL feature — description, AC, metrics,
-      children. This context shapes the entire draft.
-
-      Unparented is fine. But if the user later wants to attach to a feature at
-      save time, we'll need to review it then.
-    output: "parent_feature_context"
-
-  # Phase 4: Figma check (conditional on frontend signals)
-  - id: "figma-check"
-    type: "agent"
-    condition: "has_frontend_signals == 'true'"
-    prompt: |
-      This sounds like it might involve UI work.
-      Ask: "Is there a Figma design for this? If so, share the link or
-      describe where to find it."
-
-      If yes: confirm the design reference.
-      If no: acknowledge, move on. Set a flag for the pre-save summary.
-    output: "figma_context"
-
-  # Phase 6: Sequential draft (order enforced by recipe runner)
-  - id: "draft-description"
+  - id: "map-sections-to-agents"
     type: "agent"
     prompt: |
-      Draft the story description using Connextra format:
-      "As a [specific persona], I want [capability], so that [benefit]."
+      Create a dispatch plan for drafting work item sections.
 
-      Include context section and scope (in/out of scope).
+      Discovered sections from the template:
+      {{discovered_sections}}
 
-      Parent feature context: {{parent_feature_context}}
-      User's topic: {{user_input}}
-      Template: {{story_template}}
+      Read the section profiles at:
+      amplifier-bundle/recipes/ado-story-section-profiles.yaml
 
-      Check recent discoveries (category: ado-story-creation) for team patterns.
-      Use plain English. Never mention Connextra, INVEST, or framework names.
-    output: "story_description"
+      For each discovered section, find the best profile match:
+      1. Exact key match in profiles → use that profile directly
+      2. No exact match → find the most semantically similar profile
+         and adapt its conventions for the actual header name
+      3. No similar match → use the generic_prompt from profiles
+      4. If a profile has source: "phase2_connextra" → mark as pre-filled
+         (assembled from persona + story brief)
+      5. If a profile has preserve: true → mark as preserved
+         (copied verbatim from template, not drafted)
 
-  - id: "draft-ac"
+      Output a JSON dispatch plan:
+      {
+        "sections": [
+          {
+            "key": "preamble",
+            "field": "System.Description",
+            "header": "(preamble)",
+            "profile_match": "preamble",
+            "match_type": "exact",
+            "agent": null,
+            "conventions": [],
+            "source": "phase2_connextra",
+            "preserve": false
+          },
+          {
+            "key": "dor_reminders",
+            "field": "System.Description",
+            "header": "DoR Reminders",
+            "profile_match": "dor_reminders",
+            "match_type": "exact",
+            "agent": null,
+            "conventions": [],
+            "source": null,
+            "preserve": true
+          },
+          {
+            "key": "context_assumptions",
+            "field": "System.Description",
+            "header": "Context/Assumptions",
+            "profile_match": "context_assumptions",
+            "match_type": "exact",
+            "agent": "amplihack:ado-story-architect",
+            "conventions": ["In scope / out of scope...", "..."],
+            "source": null,
+            "preserve": false
+          }
+        ]
+      }
+    output: "dispatch_plan"
+
+  # =========================================================================
+  # Phase 3: PARALLEL DRAFTING
+  # All sections drafted from the same inputs. Preserved sections (DoR, DoD,
+  # Release Readiness) are copied from template, not drafted.
+  # =========================================================================
+
+  - id: "draft-all-sections"
+    type: "agent"
+    agent: "amplihack:ado-story-architect"
+    prompt: |
+      Draft all sections of the work item based on the dispatch plan.
+
+      For each section in the plan:
+      - If source is "phase2_connextra": build the Connextra preamble from
+        persona + story brief: "As a [persona], I want [capability], so that [benefit]"
+      - If preserve is true: skip — these are team checklists copied from
+        the template by the fill tool
+      - Otherwise: draft the section following its conventions
+
+      ALL drafted sections receive the same context:
+      - Story brief: {{story_brief}}
+      - Persona: {{persona}}
+      - Done criteria: {{done_criteria}}
+      - Parent feature: {{parent_feature_context}}
+      - Work item type: {{work_item_type}}
+
+      Apply each section's conventions strictly. Key rules:
+      - No implementation details, specific repos, or code-level solutions
+        (unless the user explicitly provided them)
+      - AC must use Given/When/Then format with at least one unhappy path
+      - Scope story contribution to parent feature, don't restate the whole feature
+      - Plain English — never mention Connextra, INVEST, or framework names
+
+      Dispatch plan: {{dispatch_plan}}
+
+      Output as JSON matching the fill_template.py sections format:
+      {
+        "System.Description": {
+          "preamble": "As a [persona], I want...",
+          "context_assumptions": "markdown content...",
+          "_preserve": ["dor_reminders", "dod_reminders"]
+        },
+        "Microsoft.VSTS.Common.AcceptanceCriteria": {
+          "outcome": "markdown content...",
+          "additional_context": "Given/When/Then criteria...",
+          "_preserve": ["release_readiness", "guest_impact", ...]
+        }
+      }
+
+      The _preserve arrays list section keys to copy verbatim from template.
+      Write drafted content in markdown — the template filler converts to HTML.
+    output: "drafted_sections"
+
+  - id: "okr-alignment"
     type: "agent"
     prompt: |
-      Draft 3-5 testable acceptance criteria based on the description.
-      Each AC must trace to something in the description.
-      Use Given/When/Then format. Include at least one unhappy path.
+      Quick OKR/strategy alignment check via MCP wiki search.
+      1-2 line summary. Green check or soft flag. Never blocks.
 
-      Description: {{story_description}}
-      Template: {{story_template}}
-    output: "acceptance_criteria"
+      Story brief: {{story_brief}}
+      Parent feature: {{parent_feature_context}}
+    output: "okr_alignment"
 
-  - id: "research-metrics"
+  # =========================================================================
+  # Phase 4: QUALITY GATES
+  # Sequential checks that refine the drafted sections.
+  # =========================================================================
+
+  - id: "technical-prescription-guard"
     type: "agent"
     prompt: |
-      Propose a quantifiable outcome metric tied to specific AC.
+      Review ALL drafted sections for technical prescriptiveness.
+
+      Work items describe WHAT needs to happen and HOW WE KNOW WE'RE DONE.
+      They do NOT describe HOW TO BUILD IT.
+
+      Flag and rewrite any content that:
+      - Names specific repositories, services, or code paths
+      - Prescribes implementation approach
+      - Specifies technical architecture decisions
+      - Includes code snippets, API endpoints, or database schemas
+
+      EXCEPTION: If the user explicitly provided technical details in their
+      original input, those may stay. The guard only strips AI-invented specifics.
+
+      Output the cleaned sections in the same JSON format, plus a summary
+      of changes made (if any).
+
+      User's original input: {{user_input}}
+      Drafted sections: {{drafted_sections}}
+    output: "tech_guard_result"
+
+  - id: "coherence-test"
+    type: "agent"
+    prompt: |
+      Review ALL sections together for coherence. The sections were drafted
+      independently — do they tell ONE consistent story?
+
+      Check:
+      - Do AC trace back to the description?
+      - Does the persona remain consistent throughout?
+      - Does scope fit under the parent feature (if any)?
+      - Are context/assumptions consistent with AC?
+      - Is the done criteria reflected in the AC?
+      - Are there contradictions between sections?
+
+      If everything is coherent: confirm and pass through.
+
+      If there are inconsistencies:
+      - Make minor tweaks to resolve (rewording, alignment)
+      - For material conflicts, present both versions to the user
+        and ask which direction is right
+
+      Output the final coherent sections JSON (same format as input).
+
+      Sections: {{tech_guard_result}}
+      Story brief: {{story_brief}}
+      Persona: {{persona}}
+      Done criteria: {{done_criteria}}
+      Parent feature: {{parent_feature_context}}
+    output: "coherence_result"
+
+  - id: "metrics-research"
+    type: "agent"
+    agent: "amplihack:ado-metrics-coach"
+    prompt: |
+      Propose one quantifiable outcome metric for this work item.
       Research via MCP: past team outcomes, OKRs, industry benchmarks.
 
       Include: metric name, baseline (or "to be established"), target,
       timeframe, and which AC it validates.
 
+      This is lighter than feature-level metrics — one clear metric tied
+      to specific acceptance criteria. Trace to parent feature metrics
+      where possible.
+
       If research turns up nothing, say so and ask the user.
 
-      Description: {{story_description}}
-      AC: {{acceptance_criteria}}
+      Coherent sections: {{coherence_result}}
+      Parent feature: {{parent_feature_context}}
+      OKR alignment: {{okr_alignment}}
     output: "outcome_metrics"
 
-  - id: "okr-alignment"
+  # --- Analyst lenses: select relevant perspectives, dispatch, compile ---
+
+  - id: "select-analyst-lenses"
     type: "agent"
     prompt: |
-      Quick OKR/strategy alignment check.
-      Search wiki via MCP for team OKRs. 1-2 line summary.
-      Green check if aligned, soft flag if not. Never blocks the save.
+      Based on this work item, select which analyst lenses are most relevant.
+      Be selective — only choose where the content genuinely warrants it.
+      1-3 lenses maximum.
 
-      Description: {{story_description}}
-      AC: {{acceptance_criteria}}
-    output: "okr_alignment"
+      Lenses and triggers:
+      - lawyer: privacy, PII, data collection, payments, compliance, regulation,
+                contracts, consumer protection, liability, terms of service
+      - economist: pricing, revenue, conversion, ROI, cost reduction, business case,
+                   demand, market share, monetization, cost-benefit
+      - anthropologist: user behavior, cultural context, travel rituals, social dynamics,
+                        personas, habits, community, identity, life events
+      - psychologist: trust, anxiety, cognitive load, mental models, motivation,
+                      habit formation, onboarding, fear, decision-making, UX friction
+
+      Output ONLY a comma-separated list. E.g.: "lawyer,economist"
+
+      Work item: {{coherence_result}}
+    output: "selected_lenses"
+
+  - id: "analyst-lawyer"
+    type: "agent"
+    condition: "'lawyer' in selected_lenses"
+    prompt: |
+      Apply a legal/compliance lens. Focus on: privacy/PII risks, regulatory
+      requirements, contractual constraints, liability exposure.
+      3-5 specific, actionable observations. PM-readable.
+
+      Reference: amplifier-bundle/skills/lawyer-analyst/QUICK_REFERENCE.md
+
+      Work item: {{coherence_result}}
+    output: "lawyer_perspective"
+
+  - id: "analyst-economist"
+    type: "agent"
+    condition: "'economist' in selected_lenses"
+    prompt: |
+      Apply an economics lens. Focus on: incentive structures, opportunity cost,
+      business case validity, unintended economic effects.
+      3-5 specific, actionable observations. PM-readable.
+
+      Reference: amplifier-bundle/skills/economist-analyst/QUICK_REFERENCE.md
+
+      Work item: {{coherence_result}}
+    output: "economist_perspective"
+
+  - id: "analyst-anthropologist"
+    type: "agent"
+    condition: "'anthropologist' in selected_lenses"
+    prompt: |
+      Apply an anthropological lens. Focus on: behavior assumptions vs. actual
+      patterns, cultural/social context, whether framing reflects reality.
+      3-5 specific, actionable observations. PM-readable.
+
+      Reference: amplifier-bundle/skills/anthropologist-analyst/QUICK_REFERENCE.md
+
+      Work item: {{coherence_result}}
+    output: "anthropologist_perspective"
+
+  - id: "analyst-psychologist"
+    type: "agent"
+    condition: "'psychologist' in selected_lenses"
+    prompt: |
+      Apply a psychology lens. Focus on: user trust, cognitive load,
+      mental models, motivation, emotional responses.
+      3-5 specific, actionable observations. PM-readable.
+
+      Reference: amplifier-bundle/skills/psychologist-analyst/QUICK_REFERENCE.md
+
+      Work item: {{coherence_result}}
+    output: "psychologist_perspective"
+
+  - id: "compile-analyst-summary"
+    type: "agent"
+    prompt: |
+      Compile analyst perspectives into a single advisory block (max 200 words).
+      Only include lenses that produced findings. Group by lens.
+      If none selected, output: "No analyst perspectives selected."
+
+      Lenses selected: {{selected_lenses}}
+      Lawyer: {{lawyer_perspective}}
+      Economist: {{economist_perspective}}
+      Anthropologist: {{anthropologist_perspective}}
+      Psychologist: {{psychologist_perspective}}
+    output: "analyst_summary"
+
+  # =========================================================================
+  # Phase 5: USER REVIEW + LATE CHECKS
+  # Present the full draft, iterate, then run checks that benefit from
+  # having the work item fully defined.
+  # =========================================================================
+
+  - id: "present-draft"
+    type: "agent"
+    prompt: |
+      Present the full, reviewed draft to the user.
+
+      Include:
+      - All sections (from coherence result)
+      - Outcome metric
+      - Analyst advisory (if any)
+      - OKR alignment
+      - Parent feature (if any)
+
+      Accept changes across multiple rounds. Maintain section structure.
+      When incorporating changes, keep the sections JSON format intact.
+      Loop until user says "looks good."
+
+      Sections: {{coherence_result}}
+      Metrics: {{outcome_metrics}}
+      Analyst summary: {{analyst_summary}}
+      OKR: {{okr_alignment}}
+      Parent: {{parent_feature_context}}
+      Work item type: {{work_item_type}}
+    output: "revised_draft"
 
   - id: "generate-title"
     type: "agent"
     prompt: |
-      Generate a title following team naming conventions.
-      Verb phrase from the user's perspective: "User can view X", not "Add X feature."
-      Derived from the full story body — title summarizes, not leads.
+      Generate a title following the template's title format.
+      Look at System.Title in the template for the naming convention.
 
-      Description: {{story_description}}
-      AC: {{acceptance_criteria}}
-      Metrics: {{outcome_metrics}}
+      For User Stories: verb phrase from user's perspective
+      ("User can view X", not "Add X feature").
+      For Bugs: describe the defect behavior.
+      For other types: concise, descriptive.
+
+      Title is derived from body — it summarizes, not leads.
+
+      Template: {{story_template}}
+      Draft: {{revised_draft}}
+      Work item type: {{work_item_type}}
     output: "story_title"
 
-  # Phase 7: Iterate with user
-  - id: "iterate-with-user"
+  - id: "duplicate-search"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/query_wiql.py \
+        --workspace "{{selected_workspace}}" \
+        --wiql "SELECT [System.Id],[System.Title],[System.State] \
+          FROM WorkItems WHERE [System.WorkItemType] = '{{work_item_type}}' \
+          AND [System.Title] CONTAINS '{{story_title}}'" \
+        --format json
+    output: "duplicate_candidates"
+
+  - id: "evaluate-duplicates"
     type: "agent"
     prompt: |
-      Present the full draft to the user:
+      Check for potential duplicates now that we have a full definition.
+      If >70% similar: present to user, ask "update existing or create new?"
+      If 40-70%: mention as context. If none match: continue silently.
 
-      **Title:** {{story_title}}
+      Candidates: {{duplicate_candidates}}
+      Our title: {{story_title}}
+      Our draft: {{revised_draft}}
+    output: "duplicate_decision"
 
-      **Description:** {{story_description}}
-
-      **Acceptance Criteria:** {{acceptance_criteria}}
-
-      **Outcome Metric:** {{outcome_metrics}}
-
-      **OKR Alignment:** {{okr_alignment}}
-
-      **Figma:** {{figma_context}}
-
-      **Parent Feature:** {{parent_feature_context}}
-
-      Accept changes across multiple rounds. After each change,
-      flag if other sections need updating to maintain traceability.
-      Loop until user says "looks good."
-    output: "revised_draft"
-
-  # Phase 7b: Consistency validation
-  - id: "validate-consistency"
+  - id: "figma-check"
     type: "agent"
+    condition: "has_frontend_signals == 'true'"
     prompt: |
-      Check this draft for internal consistency:
-      - Do AC trace to description?
-      - Does metric trace to AC?
-      - Does title reflect the body?
-      - Does scope fit under parent feature (if any)?
+      This work item involves UI work.
+      Ask: "Is there a Figma design for this?"
+      If yes: confirm the design reference for the design section.
+      If no: move on.
+    output: "figma_context"
 
-      Flag issues or confirm "consistent."
+  # =========================================================================
+  # Phase 6: SAVE
+  # Final gate, deterministic HTML assembly, ADO creation, cleanup.
+  # =========================================================================
 
-      Draft: {{revised_draft}}
-    output: "validation_result"
-
-  - id: "re-iterate"
-    type: "agent"
-    condition: "'issue' in validation_result.lower()"
-    prompt: |
-      Show consistency issues to user: {{validation_result}}
-      Draft: {{revised_draft}}
-      Iterate until resolved or user overrides.
-    output: "final_draft"
-
-  # Phase 9: Pre-commit review gate
   - id: "pre-commit-review"
     type: "agent"
     prompt: |
-      Final quality review before saving. Grade the draft across:
+      Final quality review before saving. Grade across:
       template compliance, AC quality, writing clarity, value clarity.
 
-      Show soft warnings, not blockers. Offer:
-      1. Fix in chat
-      2. Save as-is (post warnings as ADO comment)
-      3. Cancel
+      Soft warnings only. Offer: fix / save as-is / cancel.
 
       Pre-save summary:
+      - Work item type: {{work_item_type}}
       - Parent feature: {{#parent_feature_context}}resolved{{/parent_feature_context}}{{^parent_feature_context}}none{{/parent_feature_context}}
       - Figma design: {{#figma_context}}linked{{/figma_context}}{{^figma_context}}none{{/figma_context}}
       - Duplicate check: completed
+      - Outcome metric: {{outcome_metrics}}
 
-      Draft: {{revised_draft}}{{final_draft}}
+      Analyst advisory:
+      {{analyst_summary}}
+
+      Draft: {{revised_draft}}
+      Title: {{story_title}}
     output: "user_save_decision"
 
-  # Phase 10a: Prepare manifest — agent writes files, no ADO access
   - id: "prepare-manifest"
     type: "agent"
     condition: "'save' in user_save_decision.lower()"
     prompt: |
-      Prepare the final story for creation. Write three files:
+      Prepare the final work item for creation. Write TWO files:
 
       1. /tmp/ado_new_story_manifest.json — JSON metadata:
          {
-           "type": "User Story",
-           "title": "<story title>",
+           "type": "{{work_item_type}}",
+           "title": "{{story_title}}",
            "parent_id": <integer or null>,
            "tags": ["tag1", "tag2"],
            "area": "<area path or null>",
            "iteration": "<iteration path or null>",
-           "warnings": "<unresolved quality warnings text, or null>"
+           "warnings": "<unresolved quality warnings, or null>"
          }
 
-      2. /tmp/ado_new_story_description.md — full story description in markdown.
-         Include the Figma link in this file if one was provided.
-         If attaching to a feature not reviewed this session, note that in the
-         warnings field of the manifest (not as a blocker).
+      2. /tmp/ado_new_story_sections.json — Structured section content
+         for the template filler. Use the section keys from the revised
+         draft. Format:
+         {
+           "System.Description": {
+             "preamble": "As a [persona], I want...",
+             "context_assumptions": "markdown content...",
+             "_preserve": ["dor_reminders", "dod_reminders"]
+           },
+           "Microsoft.VSTS.Common.AcceptanceCriteria": {
+             "outcome": "markdown content...",
+             "additional_context": "Given/When/Then criteria...",
+             "_preserve": ["release_readiness", "guest_impact", ...]
+           }
+         }
 
-      3. /tmp/ado_new_story_ac.html — acceptance criteria in HTML.
-         Preserve the team DoD template exactly as the user approved it.
+         Content should be markdown — the fill tool converts to HTML.
+         The _preserve arrays tell the tool to copy those sections verbatim
+         from the template (team checklists).
+         Section keys MUST match the template sections discovered in Phase 2.
 
-      Only create files that have content. Do NOT call any MCP tools or ADO APIs.
-      The bash create step handles all ADO writes.
+      Do NOT write HTML files — the fill-template step handles HTML assembly.
+      Do NOT call any MCP tools or ADO APIs.
 
-      Draft: {{revised_draft}}{{final_draft}}
+      Draft: {{revised_draft}}
+      Title: {{story_title}}
       Parent: {{parent_feature_context}}
       Figma: {{figma_context}}
       Save decision: {{user_save_decision}}
     output: "manifest_prepared"
 
-  # Phase 10b: Create in ADO — deterministic bash
+  - id: "fill-template"
+    type: "bash"
+    condition: "'save' in user_save_decision.lower()"
+    command: |
+      SECTIONS="/tmp/ado_new_story_sections.json"
+      TEMPLATE="/tmp/ado_story_template.json"
+
+      if [ ! -f "$SECTIONS" ]; then
+        echo "No sections file — skipping template fill."
+        exit 1
+      fi
+      if [ ! -f "$TEMPLATE" ]; then
+        echo "No template file — skipping template fill."
+        exit 1
+      fi
+
+      python3 .claude/scenarios/az-devops-tools/fill_template.py \
+        --template-file "$TEMPLATE" \
+        --sections-file "$SECTIONS" \
+        --output-dir /tmp/ado_new_story_filled/
+
+      [ -f /tmp/ado_new_story_filled/description.html ] && \
+        mv /tmp/ado_new_story_filled/description.html /tmp/ado_new_story_description.html
+      [ -f /tmp/ado_new_story_filled/ac.html ] && \
+        mv /tmp/ado_new_story_filled/ac.html /tmp/ado_new_story_ac.html
+
+      echo "Template filled. Files:"
+      ls -la /tmp/ado_new_story_description.html /tmp/ado_new_story_ac.html 2>/dev/null
+    output: "template_filled"
+
   - id: "create-in-ado"
     type: "bash"
     condition: "'save' in user_save_decision.lower()"
     command: |
       MANIFEST="/tmp/ado_new_story_manifest.json"
-      DESC_FILE="/tmp/ado_new_story_description.md"
+      DESC_FILE="/tmp/ado_new_story_description.html"
       AC_FILE="/tmp/ado_new_story_ac.html"
 
       if [ ! -f "$MANIFEST" ]; then
@@ -298,18 +689,19 @@ steps:
         exit 1
       fi
 
+      TYPE=$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(m.get('type','User Story'))")
       TITLE=$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(m.get('title',''))")
       PARENT=$(python3 -c "import json; m=json.load(open('$MANIFEST')); v=m.get('parent_id'); print(v if v else '')")
       TAGS=$(python3 -c "import json; m=json.load(open('$MANIFEST')); t=m.get('tags') or ''; print(','.join(t) if isinstance(t,list) else t)")
       AREA=$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(m.get('area') or '')")
       ITER=$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(m.get('iteration') or '')")
 
-      CMD=(python .claude/scenarios/az-devops-tools/create_work_item.py
-           --type "User Story"
+      CMD=(python3 .claude/scenarios/az-devops-tools/create_work_item.py
+           --type "$TYPE"
            --title "$TITLE"
            --workspace "{{selected_workspace}}")
 
-      [ -f "$DESC_FILE" ]    && CMD+=(--description "$(cat "$DESC_FILE")")
+      [ -f "$DESC_FILE" ]    && CMD+=(--no-format --description "$(cat "$DESC_FILE")")
       [ -n "$PARENT" ]       && CMD+=(--parent "$PARENT")
       [ -n "$TAGS" ]         && CMD+=(--tags "$TAGS")
       [ -n "$AREA" ]         && CMD+=(--area "$AREA")
@@ -323,7 +715,6 @@ steps:
       exit $EXIT_CODE
     output: "created_work_item"
 
-  # Phase 10c: Post warnings as ADO comment if any
   - id: "post-warnings"
     type: "bash"
     condition: "'save' in user_save_decision.lower()"
@@ -337,31 +728,35 @@ steps:
         exit 0
       fi
 
-      python .claude/scenarios/az-devops-tools/update_work_item.py \
+      python3 .claude/scenarios/az-devops-tools/update_work_item.py \
         --id "$ITEM_ID" \
         --workspace "{{selected_workspace}}" \
         --comment "Pre-save quality warnings (PM accepted):\n\n$WARNINGS"
     output: "warnings_posted"
 
-  # Phase 10d: Cleanup temp files
   - id: "cleanup-temp"
     type: "bash"
     command: |
       rm -f /tmp/ado_new_story_manifest.json \
-             /tmp/ado_new_story_description.md \
+             /tmp/ado_new_story_sections.json \
+             /tmp/ado_new_story_description.html \
              /tmp/ado_new_story_ac.html \
-             /tmp/ado_new_story_id.txt
+             /tmp/ado_new_story_id.txt \
+             /tmp/ado_story_template.json
+      rm -rf /tmp/ado_new_story_filled/
       echo "Temp files cleaned up."
     output: "cleanup_done"
 
-  # Phase 11: Reflection
   - id: "reflect"
     type: "agent"
     prompt: |
       Store discovery for category "ado-story-creation":
-      - Story ID, parent feature, key patterns
-      - Whether user overrode any quality gates
+      - Work item ID, type, parent feature
+      - Key patterns, persona used
+      - Analyst lenses selected and findings
+      - Whether user overrode quality gates
+      - Any template sections that required fuzzy matching (template drift signal)
 
       Created: {{created_work_item}}
-      Save decision: {{user_save_decision}}
+      Work item type: {{work_item_type}}
     output: "reflection"

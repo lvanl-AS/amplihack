@@ -1,204 +1,507 @@
 name: "ado-feature-creation"
-description: "Conversational feature creation with value stress-test and slicability check"
-version: "1.0.0"
+description: "Conversational feature creation with dynamic template drafting, coherence testing, and business outcome qualification"
+version: "2.0.0"
 author: "Amplihack Team"
 tags: ["ado", "create", "feature"]
 
 context:
+  # Inputs
   selected_workspace: ""
-  auth_status: ""
-  feature_template: ""
   user_input: ""
-  topic_keywords: ""
-  duplicate_candidates: ""
-  parent_epic_context: ""
-  parent_epic_id: ""
+  # Phase 1: Understand
+  auth_status: ""
+  feature_brief: ""
   has_frontend_signals: "false"
-  figma_context: ""
-  value_check: ""
-  feature_description: ""
   stakeholders: ""
-  three_audience_wins: ""
-  quality_measures: ""
-  acceptance_criteria: ""
-  outcome_metrics: ""
+  seed_outcome: ""
+  parent_epic_context: ""
+  # Phase 2: Template Discovery
+  feature_template: ""
+  discovered_sections: ""
+  dispatch_plan: ""
+  # Phase 3: Parallel Drafting
+  drafted_sections: ""
   okr_alignment: ""
-  candidate_stories: ""
-  feature_title: ""
+  # Phase 4: Quality Gates
+  tech_guard_result: ""
+  coherence_result: ""
+  business_outcomes: ""
+  selected_lenses: ""
+  lawyer_perspective: ""
+  economist_perspective: ""
+  anthropologist_perspective: ""
+  psychologist_perspective: ""
+  analyst_summary: ""
+  # Phase 5: User Review + Late Checks
   revised_draft: ""
-  validation_result: ""
-  final_draft: ""
-  pre_commit_review: ""
+  feature_title: ""
+  candidate_stories: ""
+  duplicate_candidates: ""
+  duplicate_decision: ""
+  figma_context: ""
+  # Phase 6: Save
   user_save_decision: ""
+  manifest_prepared: ""
+  template_filled: ""
+  created_work_item: ""
+  candidates_posted: ""
+  warnings_posted: ""
+  cleanup_done: ""
+  reflection: ""
 
 steps:
-  # Phase 1: Auth check against selected workspace
+  # =========================================================================
+  # Phase 1: UNDERSTAND
+  # Build a clear picture of the feature before any drafting begins.
+  # Outputs: feature_brief, stakeholders, seed_outcome, parent_epic_context
+  # =========================================================================
+
   - id: "auth-check"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/auth_check.py \
+      python3 .claude/scenarios/az-devops-tools/auth_check.py \
         --workspace "{{selected_workspace}}" --quiet
     output: "auth_status"
 
-  - id: "load-template"
-    type: "bash"
-    command: |
-      cat amplifier-bundle/skills/common/templates/reference_alaska_feature_template.md
-    output: "feature_template"
-
-  # Phase 2: Extract keywords + detect signals
-  - id: "extract-keywords"
+  - id: "understand-feature"
     type: "agent"
     prompt: |
-      From the user's input, extract:
-      1. Search keywords for duplicate detection (2-4 key terms)
-      2. Whether this sounds frontend-related (has_frontend_signals)
+      Have a conversation with the user to understand what they want to build.
+      You are NOT drafting the feature yet — just building understanding.
 
-      User input: {{user_input}}
-    output: "topic_keywords"
+      Start from their initial input and explore:
+      - What is the core problem or opportunity?
+      - What does the desired end state look like?
+      - Any constraints or context they already know?
+      - Is this net-new or improving something existing?
 
-  # Phase 2c: Duplicate detection
-  - id: "duplicate-search"
-    type: "bash"
-    command: |
-      python .claude/scenarios/az-devops-tools/query_wiql.py \
-        --workspace "{{selected_workspace}}" \
-        --wiql "SELECT [System.Id],[System.Title],[System.State] \
-          FROM WorkItems WHERE [System.WorkItemType] = 'Feature' \
-          AND [System.Title] CONTAINS '{{topic_keywords}}'" \
-        --format json
-    output: "duplicate_candidates"
+      Keep it natural. 2-3 questions max. Don't interrogate.
 
-  - id: "evaluate-duplicates"
+      Output a structured feature brief: a concise summary of what the
+      feature is about, who it's for, and what problem it solves.
+
+      User's initial input: {{user_input}}
+    output: "feature_brief"
+
+  - id: "detect-frontend-signals"
     type: "agent"
     prompt: |
-      Check for potential duplicate features.
-      If >70% similar: present to user, ask "update existing or create new?"
-      If 40-70%: mention as context. If none: continue silently.
+      Based on the feature brief, does this involve UI or frontend work?
 
-      Candidates: {{duplicate_candidates}}
-      User's topic: {{user_input}}
-    output: "duplicate_decision"
+      Signals: pages, screens, buttons, forms, modals, layouts, components,
+      mobile, responsive, design, navigation, user-facing display changes.
 
-  # Phase 3: Parent epic/initiative resolution
+      Output ONLY "true" or "false".
+
+      Feature brief: {{feature_brief}}
+    output: "has_frontend_signals"
+
+  - id: "identify-stakeholders"
+    type: "agent"
+    prompt: |
+      Ask the user directly:
+      "Who are the stakeholders for this feature? Who benefits from it,
+      who owns it, and who are the end users?"
+
+      NEVER invent stakeholder names. Always ask.
+      This information shapes how the rest of the feature is written —
+      knowing the audience changes tone, wins framing, and AC.
+
+      Feature brief: {{feature_brief}}
+    output: "stakeholders"
+
+  - id: "seed-business-outcome"
+    type: "agent"
+    prompt: |
+      Ask the user:
+      "What outcome are you hoping for with this? Just a sentence or two —
+      doesn't need to be final, we'll refine it as we go."
+
+      This is a lightweight ask. The user likely has a gut sense of the
+      business outcome even if it's not polished yet. Capture whatever
+      they give, even if rough. If they're not sure, that's fine — note
+      it and move on.
+
+      This seed outcome will be refined and quantified later in the
+      business outcomes step. Right now we just want the direction.
+
+      Feature brief: {{feature_brief}}
+      Stakeholders: {{stakeholders}}
+    output: "seed_outcome"
+
   - id: "resolve-parent"
     type: "agent"
     prompt: |
       Determine if this feature has a parent Epic or Initiative.
 
-      User's topic: {{user_input}}
-
       If user provided a work item ID, fetch via get_work_item.py.
       If they mentioned an epic/initiative name, search via MCP.
-      If neither, search for likely parents and present options.
-      If no parent: standalone features are fine.
+      If neither: search for likely parents based on the feature brief.
+      If no parent found: standalone features are fine, move on.
 
       If confirmed: read the full parent — description, goals,
-      existing child features. This context shapes the pitch.
+      existing child features. This context shapes the drafting.
+
+      Feature brief: {{feature_brief}}
     output: "parent_epic_context"
 
-  # Phase 4: Figma check (conditional)
-  - id: "figma-check"
-    type: "agent"
-    condition: "has_frontend_signals == 'true'"
-    prompt: |
-      This sounds like it might involve UI work.
-      Ask: "Is there a Figma design for this?"
-      If yes: confirm the design reference.
-      If no: move on.
-    output: "figma_context"
+  # =========================================================================
+  # Phase 2: TEMPLATE DISCOVERY
+  # Fetch the live ADO template and dynamically map sections to agents.
+  # This avoids hardcoding section names — if the template changes, the
+  # dispatch plan adapts automatically.
+  # =========================================================================
 
-  # Phase 5: Value stress-test (always runs — not opt-in)
-  - id: "stress-test-value"
-    type: "agent"
-    prompt: |
-      Review the proposed feature for business value clarity.
-      Not a gate — a conversation to sharpen the pitch:
-      - Does the WHY hold up? Real problem, or solution looking for one?
-      - Obvious assumptions leadership would question?
-      - If something looks off, say so plainly. Better here than
-        in a stakeholder review.
+  - id: "load-template"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_templates.py \
+        --type Feature \
+        --workspace "{{selected_workspace}}" \
+        --fields-only \
+        | tee /tmp/ado_feature_template.json
+    output: "feature_template"
 
-      Brief — 2-3 observations max. Banter, not interrogation.
+  - id: "discover-sections"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fill_template.py \
+        --template-file /tmp/ado_feature_template.json \
+        --list-sections
+    output: "discovered_sections"
 
-      User's topic: {{user_input}}
-      Parent context: {{parent_epic_context}}
-    output: "value_check"
-
-  # Phase 6: Sequential draft (order enforced by recipe runner)
-  - id: "draft-description"
+  - id: "map-sections-to-agents"
     type: "agent"
     prompt: |
-      Draft WHAT and WHY sections using the feature template.
-      WHY MUST use Without/With contrast framing (team convention).
+      Create a dispatch plan for drafting feature sections.
 
-      User's topic: {{user_input}}
-      Value stress-test findings: {{value_check}}
-      Parent context: {{parent_epic_context}}
-      Template: {{feature_template}}
+      Discovered sections from the template:
+      {{discovered_sections}}
 
-      Check recent discoveries (category: ado-feature-creation) for team patterns.
-    output: "feature_description"
+      Read the section profiles at:
+      amplifier-bundle/recipes/ado-feature-section-profiles.yaml
 
-  - id: "gather-stakeholders"
+      For each discovered section, find the best profile match:
+      1. Exact key match in profiles → use that profile directly
+      2. No exact match → find the most semantically similar profile
+         and adapt its conventions for the actual header name
+         (e.g., "Customer Wins" has no profile, but "guest_wins" is similar —
+         use guest_wins conventions adapted for "Customer Wins")
+      3. No similar match at all → use the generic_prompt from profiles
+      4. If a profile has source: "phase1_stakeholders" → mark as pre-filled
+
+      Output a JSON dispatch plan:
+      {
+        "sections": [
+          {
+            "key": "what",
+            "field": "System.Description",
+            "header": "WHAT",
+            "profile_match": "what",
+            "match_type": "exact",
+            "agent": "amplihack:ado-feature-author",
+            "conventions": ["Outcome-oriented...", "..."],
+            "source": null
+          },
+          {
+            "key": "who",
+            "field": "System.Description",
+            "header": "WHO",
+            "profile_match": "who",
+            "match_type": "exact",
+            "agent": null,
+            "conventions": [],
+            "source": "phase1_stakeholders"
+          }
+        ]
+      }
+    output: "dispatch_plan"
+
+  # =========================================================================
+  # Phase 3: PARALLEL DRAFTING
+  # All sections drafted from the same inputs (feature brief, stakeholders,
+  # seed outcome, parent context). Sections are independent — coherence is
+  # verified in Phase 4.
+  # OKR alignment runs alongside drafting.
+  # =========================================================================
+
+  - id: "draft-all-sections"
     type: "agent"
+    agent: "amplihack:ado-feature-author"
     prompt: |
-      Ask the user: "Who are the stakeholders for this feature?"
-      NEVER invent stakeholder names. Always ask.
-      Description: {{feature_description}}
-    output: "stakeholders"
+      Draft all sections of the feature based on the dispatch plan.
 
-  - id: "draft-wins"
-    type: "agent"
-    prompt: |
-      Draft Three-audience Wins: Guest Wins, Business Wins, Tech Wins.
-      Each audience must have at least one bullet.
-      Description: {{feature_description}}
-      Stakeholders: {{stakeholders}}
-    output: "three_audience_wins"
+      For each section in the plan:
+      - If source is "phase1_stakeholders": slot in the stakeholders content directly
+      - Otherwise: draft the section following its conventions and using its agent
 
-  - id: "draft-quality-measures"
-    type: "agent"
-    prompt: |
-      Draft Quality Measure AC — guardrails like "no increase in X",
-      "no degradation in Y". These protect against unintended harm.
-      Description: {{feature_description}}
-      Wins: {{three_audience_wins}}
-    output: "quality_measures"
+      ALL sections receive the same context:
+      - Feature brief: {{feature_brief}}
+      - Stakeholders: {{stakeholders}}
+      - Seed outcome: {{seed_outcome}}
+      - Parent context: {{parent_epic_context}}
 
-  - id: "draft-ac"
-    type: "agent"
-    prompt: |
-      Draft functional acceptance criteria based on description and wins.
-      Each AC must trace to the description.
-      Description: {{feature_description}}
-      Wins: {{three_audience_wins}}
-      Quality measures: {{quality_measures}}
-    output: "acceptance_criteria"
+      Apply each section's conventions strictly. Key rules:
+      - WHY sections MUST use Without/With contrast framing
+      - Quality measures are GUARDRAILS, not success metrics
+      - Wins must be concrete and specific
+      - No implementation details, specific repos, or code-level solutions
+        (unless the user explicitly provided them)
 
-  - id: "research-metrics"
-    type: "agent"
-    prompt: |
-      Propose North Star metric + 2-3 leading indicators.
-      Research via MCP: past team outcomes, OKRs, industry benchmarks.
-      Trace each metric to specific AC.
+      Dispatch plan: {{dispatch_plan}}
 
-      If no evidence, say so — never invent numbers.
+      Output as JSON matching the fill_template.py sections format:
+      {
+        "System.Description": {
+          "section_key": "markdown content...",
+          ...
+        },
+        "Microsoft.VSTS.Common.AcceptanceCriteria": {
+          "section_key": "markdown content...",
+          ...
+        }
+      }
 
-      Description: {{feature_description}}
-      AC: {{acceptance_criteria}}
-    output: "outcome_metrics"
+      Write in markdown — the template filler converts to HTML.
+    output: "drafted_sections"
 
   - id: "okr-alignment"
     type: "agent"
     prompt: |
       Quick OKR/strategy alignment check via MCP wiki search.
       1-2 line summary. Green check or soft flag. Never blocks.
-      Description: {{feature_description}}
-      AC: {{acceptance_criteria}}
+
+      Feature brief: {{feature_brief}}
+      Seed outcome: {{seed_outcome}}
     output: "okr_alignment"
 
-  # Phase 7: Slicability check
+  # =========================================================================
+  # Phase 4: QUALITY GATES
+  # Sequential checks that refine the drafted sections. Each gate receives
+  # the output of the previous gate, building toward a coherent, qualified
+  # feature definition.
+  # =========================================================================
+
+  - id: "technical-prescription-guard"
+    type: "agent"
+    prompt: |
+      Review ALL drafted sections for technical prescriptiveness.
+
+      Features describe WHAT the solution looks like and HOW WE KNOW
+      WE'RE DONE. They do NOT describe HOW TO BUILD IT.
+
+      Flag and rewrite any content that:
+      - Names specific repositories, services, or code paths
+      - Prescribes implementation approach ("use microservice X", "add column Y")
+      - Specifies technical architecture decisions
+      - Includes code snippets, API endpoints, or database schemas
+
+      EXCEPTION: If the user explicitly provided technical details in their
+      original input, those may stay. The guard only strips AI-invented specifics.
+
+      Output the cleaned sections in the same JSON format, plus a summary
+      of changes made (if any).
+
+      User's original input: {{user_input}}
+      Drafted sections: {{drafted_sections}}
+    output: "tech_guard_result"
+
+  - id: "coherence-test"
+    type: "agent"
+    prompt: |
+      Review ALL sections together for coherence. The sections were drafted
+      independently — do they tell ONE consistent story?
+
+      Check:
+      - Do AC trace back to the description?
+      - Does WHY support WHAT?
+      - Do wins align with stakeholders?
+      - Is the seed outcome reflected consistently across sections?
+      - Are there contradictions between sections?
+      - Is the tone and level of detail consistent throughout?
+
+      If everything is coherent: confirm and pass through.
+
+      If there are inconsistencies:
+      - Make minor tweaks to resolve (rewording, alignment)
+      - For material conflicts (e.g., two sections imply different scope),
+        present both versions to the user and ask which direction is right
+
+      Output the final coherent sections JSON (same format as input).
+
+      Sections: {{tech_guard_result}}
+      Feature brief: {{feature_brief}}
+      Stakeholders: {{stakeholders}}
+      Seed outcome: {{seed_outcome}}
+    output: "coherence_result"
+
+  - id: "business-outcomes"
+    type: "agent"
+    agent: "amplihack:ado-metrics-coach"
+    prompt: |
+      Dedicated business outcome qualification and metrics research.
+
+      Starting from the user's seed outcome and the drafted content:
+      1. Is there a clear, stated business outcome? If vague, sharpen it.
+      2. Can we quantify it? Propose metrics where evidence exists.
+      3. Are the wins concrete or aspirational? Recommend strengthening.
+      4. Propose North Star metric + 2-3 leading indicators.
+      5. Research via MCP: past team outcomes, OKRs, industry benchmarks.
+
+      Trace each metric to specific AC. If no evidence exists for a
+      number, say so — never invent figures.
+
+      Output:
+      - Refined business outcome statement
+      - Proposed metrics with confidence level
+      - Recommendations for strengthening wins sections (if any)
+
+      Seed outcome: {{seed_outcome}}
+      Coherent sections: {{coherence_result}}
+      OKR alignment: {{okr_alignment}}
+    output: "business_outcomes"
+
+  # --- Analyst lenses: select relevant perspectives, dispatch, compile ---
+
+  - id: "select-analyst-lenses"
+    type: "agent"
+    prompt: |
+      Based on this feature, select which analyst lenses are most relevant.
+      Be selective — only choose where the content genuinely warrants it.
+      1-3 lenses maximum.
+
+      Lenses and triggers:
+      - lawyer: privacy, PII, data collection, payments, compliance, regulation,
+                contracts, consumer protection, liability, terms of service
+      - economist: pricing, revenue, conversion, ROI, cost reduction, business case,
+                   demand, market share, monetization, cost-benefit
+      - anthropologist: user behavior, cultural context, travel rituals, social dynamics,
+                        personas, habits, community, identity, life events
+      - psychologist: trust, anxiety, cognitive load, mental models, motivation,
+                      habit formation, onboarding, fear, decision-making, UX friction
+
+      Output ONLY a comma-separated list. E.g.: "lawyer,economist"
+
+      Feature: {{coherence_result}}
+    output: "selected_lenses"
+
+  - id: "analyst-lawyer"
+    type: "agent"
+    condition: "'lawyer' in selected_lenses"
+    prompt: |
+      Apply a legal/compliance lens to this feature.
+      Focus on: privacy/PII risks, regulatory requirements (aviation, consumer
+      protection, data residency), contractual constraints, liability exposure.
+
+      3-5 specific, actionable observations. PM-readable, not academic.
+
+      Reference: amplifier-bundle/skills/lawyer-analyst/QUICK_REFERENCE.md
+
+      Feature: {{coherence_result}}
+    output: "lawyer_perspective"
+
+  - id: "analyst-economist"
+    type: "agent"
+    condition: "'economist' in selected_lenses"
+    prompt: |
+      Apply an economics lens to this feature.
+      Focus on: incentive structures, demand-side reasoning, opportunity cost,
+      business case validity, unintended economic effects (cannibalization,
+      price anchoring, etc.).
+
+      3-5 specific, actionable observations. PM-readable, not academic.
+
+      Reference: amplifier-bundle/skills/economist-analyst/QUICK_REFERENCE.md
+
+      Feature: {{coherence_result}}
+    output: "economist_perspective"
+
+  - id: "analyst-anthropologist"
+    type: "agent"
+    condition: "'anthropologist' in selected_lenses"
+    prompt: |
+      Apply an anthropological lens to this feature.
+      Focus on: behavior assumptions vs. actual patterns, cultural/social context,
+      travel rituals and identity, whether framing reflects ethnographic reality.
+
+      3-5 specific, actionable observations. PM-readable, not academic.
+
+      Reference: amplifier-bundle/skills/anthropologist-analyst/QUICK_REFERENCE.md
+
+      Feature: {{coherence_result}}
+    output: "anthropologist_perspective"
+
+  - id: "analyst-psychologist"
+    type: "agent"
+    condition: "'psychologist' in selected_lenses"
+    prompt: |
+      Apply a psychology lens to this feature.
+      Focus on: user trust, anxiety reduction/introduction, cognitive load,
+      mental models assumed vs. actual, motivation structures, habit formation,
+      emotional responses at key moments.
+
+      3-5 specific, actionable observations. PM-readable, not academic.
+
+      Reference: amplifier-bundle/skills/psychologist-analyst/QUICK_REFERENCE.md
+
+      Feature: {{coherence_result}}
+    output: "psychologist_perspective"
+
+  - id: "compile-analyst-summary"
+    type: "agent"
+    prompt: |
+      Compile analyst perspectives into a single advisory block (max 200 words).
+      Only include lenses that produced findings. Group by lens.
+      If none selected, output: "No analyst perspectives selected."
+
+      Lenses selected: {{selected_lenses}}
+      Lawyer: {{lawyer_perspective}}
+      Economist: {{economist_perspective}}
+      Anthropologist: {{anthropologist_perspective}}
+      Psychologist: {{psychologist_perspective}}
+    output: "analyst_summary"
+
+  # =========================================================================
+  # Phase 5: USER REVIEW + LATE CHECKS
+  # Present the full draft, iterate, then run checks that benefit from
+  # having the ticket fully defined.
+  # =========================================================================
+
+  - id: "present-draft"
+    type: "agent"
+    prompt: |
+      Present the full, reviewed feature draft to the user.
+
+      Include:
+      - All sections (from coherence result)
+      - Business outcomes & proposed metrics
+      - Analyst advisory (if any)
+      - OKR alignment
+      - Parent context (if any)
+
+      Accept changes across multiple rounds. Maintain section structure.
+      When incorporating changes, keep the sections JSON format intact.
+      Loop until user says "looks good."
+
+      Sections: {{coherence_result}}
+      Business outcomes: {{business_outcomes}}
+      Analyst summary: {{analyst_summary}}
+      OKR: {{okr_alignment}}
+      Parent: {{parent_epic_context}}
+    output: "revised_draft"
+
+  - id: "generate-title"
+    type: "agent"
+    prompt: |
+      Generate a title following the template's title format.
+      Look at System.Title in the template for the naming convention.
+      Typical format: <team> | <area> | <short description>
+      Make the description outcome-oriented and concise.
+
+      Template: {{feature_template}}
+      Draft: {{revised_draft}}
+    output: "feature_title"
+
   - id: "slicability-check"
     type: "agent"
     prompt: |
@@ -211,73 +514,52 @@ steps:
       If <3: "Feels vague — might be worth tightening scope."
       If 8+: "Might be bigger than one feature — worth splitting."
 
-      Description: {{feature_description}}
-      AC: {{acceptance_criteria}}
+      Draft: {{revised_draft}}
     output: "candidate_stories"
 
-  - id: "generate-title"
+  - id: "duplicate-search"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/query_wiql.py \
+        --workspace "{{selected_workspace}}" \
+        --wiql "SELECT [System.Id],[System.Title],[System.State] \
+          FROM WorkItems WHERE [System.WorkItemType] = 'Feature' \
+          AND [System.Title] CONTAINS '{{feature_title}}'" \
+        --format json
+    output: "duplicate_candidates"
+
+  - id: "evaluate-duplicates"
     type: "agent"
     prompt: |
-      Generate a title following team naming conventions.
-      Outcome-oriented, concise. Derived from the full feature body.
+      Check for potential duplicate features now that we have a full definition.
+      If >70% similar: present to user, ask "update existing or create new?"
+      If 40-70%: mention as context. If none match: continue silently.
 
-      Description: {{feature_description}}
-      AC: {{acceptance_criteria}}
-      Metrics: {{outcome_metrics}}
-      Candidate stories: {{candidate_stories}}
-    output: "feature_title"
+      Candidates: {{duplicate_candidates}}
+      Our feature title: {{feature_title}}
+      Our feature draft: {{revised_draft}}
+    output: "duplicate_decision"
 
-  # Phase 8: Iterate with user
-  - id: "iterate-with-user"
+  - id: "figma-check"
     type: "agent"
+    condition: "has_frontend_signals == 'true'"
     prompt: |
-      Present the full draft:
+      This feature involves UI work.
+      Ask: "Is there a Figma design for this?"
+      If yes: confirm the design reference for the additional considerations section.
+      If no: move on.
+    output: "figma_context"
 
-      **Title:** {{feature_title}}
-      **Description:** {{feature_description}}
-      **Stakeholders:** {{stakeholders}}
-      **Three-audience Wins:** {{three_audience_wins}}
-      **Quality Measures:** {{quality_measures}}
-      **AC:** {{acceptance_criteria}}
-      **Metrics:** {{outcome_metrics}}
-      **OKR:** {{okr_alignment}}
-      **Candidate stories:** {{candidate_stories}}
-      **Figma:** {{figma_context}}
-      **Parent:** {{parent_epic_context}}
+  # =========================================================================
+  # Phase 6: SAVE
+  # Final gate, deterministic HTML assembly, ADO creation, cleanup.
+  # =========================================================================
 
-      Accept changes across multiple rounds. Maintain traceability.
-      Loop until user says "looks good."
-    output: "revised_draft"
-
-  - id: "validate-consistency"
-    type: "agent"
-    prompt: |
-      Check draft for internal consistency:
-      - Do AC trace to description?
-      - Do metrics trace to AC?
-      - Do Wins cover all three audiences?
-      - Does WHY use Without/With framing?
-      - Does scope fit under parent (if any)?
-      - Does title reflect the body?
-
-      Draft: {{revised_draft}}
-    output: "validation_result"
-
-  - id: "re-iterate"
-    type: "agent"
-    condition: "'issue' in validation_result.lower()"
-    prompt: |
-      Show consistency issues: {{validation_result}}
-      Draft: {{revised_draft}}
-      Iterate until resolved or user overrides.
-    output: "final_draft"
-
-  # Phase 9: Pre-commit gate
   - id: "pre-commit-review"
     type: "agent"
     prompt: |
-      Final quality review. Grade across: strategic clarity, pitch quality,
-      outcome metrics, slicability, value clarity.
+      Final quality review before saving. Grade across:
+      strategic clarity, pitch quality, outcome metrics, slicability, value clarity.
       Include perspective coverage (dev/QA/PM).
 
       Soft warnings only. Offer: fix / save as-is / cancel.
@@ -286,53 +568,96 @@ steps:
       - Parent epic: {{#parent_epic_context}}resolved{{/parent_epic_context}}{{^parent_epic_context}}none{{/parent_epic_context}}
       - Figma: {{#figma_context}}linked{{/figma_context}}{{^figma_context}}none{{/figma_context}}
       - Duplicate check: completed
-      - Value stress-test: completed
       - Slicability: {{candidate_stories}}
+      - Business outcomes: {{business_outcomes}}
 
-      Draft: {{revised_draft}}{{final_draft}}
+      Analyst advisory:
+      {{analyst_summary}}
+
+      Draft: {{revised_draft}}
+      Title: {{feature_title}}
     output: "user_save_decision"
 
-  # Phase 10a: Prepare manifest — agent writes files, no ADO access
   - id: "prepare-manifest"
     type: "agent"
     condition: "'save' in user_save_decision.lower()"
     prompt: |
-      Prepare the final feature for creation. Write three files:
+      Prepare the final feature for creation. Write TWO files:
 
       1. /tmp/ado_new_feature_manifest.json — JSON metadata:
          {
            "type": "Feature",
-           "title": "<feature title>",
+           "title": "{{feature_title}}",
            "parent_id": <integer or null>,
            "tags": ["tag1", "tag2"],
            "area": "<area path or null>",
            "iteration": "<iteration path or null>",
-           "warnings": "<unresolved quality warnings text, or null>"
+           "warnings": "<unresolved quality warnings, or null>"
          }
 
-      2. /tmp/ado_new_feature_description.md — full feature description in markdown.
-         Include the Figma link in this file if one was provided.
-         If attaching to a parent not reviewed this session, note that in the
-         warnings field of the manifest (not as a blocker).
+      2. /tmp/ado_new_feature_sections.json — Structured section content
+         for the template filler. Use the section keys from the revised
+         draft. Format:
+         {
+           "System.Description": {
+             "section_key": "markdown content",
+             ...
+           },
+           "Microsoft.VSTS.Common.AcceptanceCriteria": {
+             "section_key": "markdown content",
+             ...
+           }
+         }
 
-      3. /tmp/ado_new_feature_ac.html — acceptance criteria in HTML.
+         Content should be markdown — the fill tool converts to HTML.
+         Section keys MUST match the template sections discovered in Phase 2.
 
-      Only create files that have content. Do NOT call any MCP tools or ADO APIs.
-      The bash create step handles all ADO writes.
+      Do NOT write HTML files — the fill-template step handles HTML assembly.
+      Do NOT call any MCP tools or ADO APIs.
 
-      Draft: {{revised_draft}}{{final_draft}}
+      Draft: {{revised_draft}}
+      Title: {{feature_title}}
       Parent: {{parent_epic_context}}
       Figma: {{figma_context}}
       Save decision: {{user_save_decision}}
     output: "manifest_prepared"
 
-  # Phase 10b: Create in ADO — deterministic bash
+  - id: "fill-template"
+    type: "bash"
+    condition: "'save' in user_save_decision.lower()"
+    command: |
+      SECTIONS="/tmp/ado_new_feature_sections.json"
+      TEMPLATE="/tmp/ado_feature_template.json"
+
+      if [ ! -f "$SECTIONS" ]; then
+        echo "No sections file — skipping template fill."
+        exit 1
+      fi
+      if [ ! -f "$TEMPLATE" ]; then
+        echo "No template file — skipping template fill."
+        exit 1
+      fi
+
+      python3 .claude/scenarios/az-devops-tools/fill_template.py \
+        --template-file "$TEMPLATE" \
+        --sections-file "$SECTIONS" \
+        --output-dir /tmp/ado_new_feature_filled/
+
+      [ -f /tmp/ado_new_feature_filled/description.html ] && \
+        mv /tmp/ado_new_feature_filled/description.html /tmp/ado_new_feature_description.html
+      [ -f /tmp/ado_new_feature_filled/ac.html ] && \
+        mv /tmp/ado_new_feature_filled/ac.html /tmp/ado_new_feature_ac.html
+
+      echo "Template filled. Files:"
+      ls -la /tmp/ado_new_feature_description.html /tmp/ado_new_feature_ac.html 2>/dev/null
+    output: "template_filled"
+
   - id: "create-in-ado"
     type: "bash"
     condition: "'save' in user_save_decision.lower()"
     command: |
       MANIFEST="/tmp/ado_new_feature_manifest.json"
-      DESC_FILE="/tmp/ado_new_feature_description.md"
+      DESC_FILE="/tmp/ado_new_feature_description.html"
       AC_FILE="/tmp/ado_new_feature_ac.html"
 
       if [ ! -f "$MANIFEST" ]; then
@@ -346,12 +671,12 @@ steps:
       AREA=$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(m.get('area') or '')")
       ITER=$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(m.get('iteration') or '')")
 
-      CMD=(python .claude/scenarios/az-devops-tools/create_work_item.py
+      CMD=(python3 .claude/scenarios/az-devops-tools/create_work_item.py
            --type "Feature"
            --title "$TITLE"
            --workspace "{{selected_workspace}}")
 
-      [ -f "$DESC_FILE" ]    && CMD+=(--description "$(cat "$DESC_FILE")")
+      [ -f "$DESC_FILE" ]    && CMD+=(--no-format --description "$(cat "$DESC_FILE")")
       [ -n "$PARENT" ]       && CMD+=(--parent "$PARENT")
       [ -n "$TAGS" ]         && CMD+=(--tags "$TAGS")
       [ -n "$AREA" ]         && CMD+=(--area "$AREA")
@@ -365,7 +690,6 @@ steps:
       exit $EXIT_CODE
     output: "created_work_item"
 
-  # Phase 10c: Post candidate stories as ADO comment
   - id: "post-candidate-stories"
     type: "bash"
     condition: "'save' in user_save_decision.lower()"
@@ -377,13 +701,12 @@ steps:
         exit 0
       fi
 
-      python .claude/scenarios/az-devops-tools/update_work_item.py \
+      python3 .claude/scenarios/az-devops-tools/update_work_item.py \
         --id "$ITEM_ID" \
         --workspace "{{selected_workspace}}" \
         --comment "Candidate stories (slicability check — for ado-story-creation reference):\n\n{{candidate_stories}}"
     output: "candidates_posted"
 
-  # Phase 10d: Post warnings as ADO comment if any
   - id: "post-warnings"
     type: "bash"
     condition: "'save' in user_save_decision.lower()"
@@ -397,31 +720,35 @@ steps:
         exit 0
       fi
 
-      python .claude/scenarios/az-devops-tools/update_work_item.py \
+      python3 .claude/scenarios/az-devops-tools/update_work_item.py \
         --id "$ITEM_ID" \
         --workspace "{{selected_workspace}}" \
         --comment "Pre-save quality warnings (PM accepted):\n\n$WARNINGS"
     output: "warnings_posted"
 
-  # Phase 10e: Cleanup temp files
   - id: "cleanup-temp"
     type: "bash"
     command: |
       rm -f /tmp/ado_new_feature_manifest.json \
-             /tmp/ado_new_feature_description.md \
+             /tmp/ado_new_feature_sections.json \
+             /tmp/ado_new_feature_description.html \
              /tmp/ado_new_feature_ac.html \
-             /tmp/ado_new_feature_id.txt
+             /tmp/ado_new_feature_id.txt \
+             /tmp/ado_feature_template.json
+      rm -rf /tmp/ado_new_feature_filled/
       echo "Temp files cleaned up."
     output: "cleanup_done"
 
-  # Phase 11: Reflection
   - id: "reflect"
     type: "agent"
     prompt: |
       Store discovery for category "ado-feature-creation":
       - Feature ID, parent, key patterns
-      - Value stress-test findings, slicability outcome
+      - Business outcome, metrics proposed
+      - Slicability result
+      - Analyst lenses selected and findings
       - Whether user overrode quality gates
+      - Any template sections that required fuzzy matching (signals template drift)
 
       Created: {{created_work_item}}
     output: "reflection"

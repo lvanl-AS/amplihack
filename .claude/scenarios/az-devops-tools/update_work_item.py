@@ -37,6 +37,7 @@ from common import (
     load_config,
     validate_work_item_id,
 )
+from format_html import markdown_to_html
 
 
 def update_work_item(
@@ -48,6 +49,7 @@ def update_work_item(
     description: str | None = None,
     fields: dict[str, str] | None = None,
     comment: str | None = None,
+    auto_format_description: bool = True,
 ) -> dict:
     """Update work item fields.
 
@@ -57,9 +59,10 @@ def update_work_item(
         state: New state
         assigned_to: New assignee
         title: New title
-        description: New description
+        description: New description (markdown if auto_format_description=True)
         fields: Additional fields to update
         comment: Comment explaining changes
+        auto_format_description: Convert description from markdown to HTML
 
     Returns:
         Updated work item data
@@ -77,6 +80,8 @@ def update_work_item(
     if title:
         field_updates.append(f"System.Title={title}")
     if description:
+        if auto_format_description:
+            description = markdown_to_html(description)
         field_updates.append(f"System.Description={description}")
 
     # Add custom fields
@@ -92,7 +97,7 @@ def update_work_item(
         )
 
     # Update work item
-    cmd = ["boards", "work-item", "update", "--id", str(work_item_id)]
+    cmd = ["work-item", "update", "--id", str(work_item_id)]
 
     if field_updates:
         # Join fields with space for CLI
@@ -105,7 +110,7 @@ def update_work_item(
     cmd.append("--output")
     cmd.append("json")
 
-    result = wrapper.devops_command(cmd, timeout=30)
+    result = wrapper.boards_command(cmd, timeout=30)
 
     if not result.success:
         # Check for common errors
@@ -175,13 +180,18 @@ Examples:
     parser.add_argument("--state", help="New state")
     parser.add_argument("--assign-to", help="New assignee email or display name")
     parser.add_argument("--title", help="New title")
-    parser.add_argument("--description", help="New description (HTML supported)")
+    parser.add_argument("--description", help="New description (markdown format, auto-converted to HTML)")
     parser.add_argument(
         "--field",
         action="append",
         help="Custom field update (format: FieldName=Value). Can specify multiple times.",
     )
     parser.add_argument("--comment", help="Add comment explaining changes")
+    parser.add_argument(
+        "--no-format",
+        action="store_true",
+        help="Don't auto-format description from markdown to HTML (use when description is already HTML)",
+    )
 
     # Config options
     parser.add_argument("--org", help="Azure DevOps organization URL")
@@ -235,6 +245,7 @@ Examples:
             description=args.description,
             fields=custom_fields if custom_fields else None,
             comment=args.comment,
+            auto_format_description=not args.no_format,
         )
 
         # Show success message

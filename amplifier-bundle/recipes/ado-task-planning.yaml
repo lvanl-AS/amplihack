@@ -21,14 +21,14 @@ steps:
   - id: "auth-check"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/auth_check.py \
+      python3 .claude/scenarios/az-devops-tools/auth_check.py \
         --workspace "{{selected_workspace}}" --quiet
     output: "auth_status"
 
   - id: "fetch-parent-story"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/get_work_item.py \
+      python3 .claude/scenarios/az-devops-tools/get_work_item.py \
         --id {{work_item_id}} \
         --workspace "{{selected_workspace}}" \
         --relations --format json

@@ -14,13 +14,19 @@ context:
   meta_findings: ""
   grade_card: ""
   user_action: ""
+  selected_lenses: ""
+  lawyer_perspective: ""
+  economist_perspective: ""
+  anthropologist_perspective: ""
+  psychologist_perspective: ""
+  analyst_summary: ""
 
 steps:
   # Phase 2: Deterministic fetch (all bash — guaranteed execution)
   - id: "fetch-story"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/get_work_item.py \
+      python3 .claude/scenarios/az-devops-tools/get_work_item.py \
         --id {{work_item_id}} \
         --workspace "{{selected_workspace}}" \
         --relations --format json
@@ -29,7 +35,7 @@ steps:
   - id: "fetch-comments"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/get_comments.py \
+      python3 .claude/scenarios/az-devops-tools/get_comments.py \
         --id {{work_item_id}} \
         --workspace "{{selected_workspace}}" \
         --format json
@@ -38,15 +44,117 @@ steps:
   - id: "fetch-revisions"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/get_revisions.py \
+      python3 .claude/scenarios/az-devops-tools/get_revisions.py \
         --id {{work_item_id}} \
         --workspace "{{selected_workspace}}" \
         --format json
     output: "revisions"
 
-  # Phase 2: Agent grading (MCP for wiki/template enrichment, agent judgment for grading)
+  # Phase 2b: Smart analyst lens selection + perspectives
+  - id: "select-analyst-lenses"
+    type: "agent"
+    prompt: |
+      Based on this story's content, select which analyst lenses are most relevant.
+      Be selective — only choose lenses where the content genuinely warrants that perspective.
+      Choose 1-3 lenses maximum.
+
+      Lenses and their triggers:
+      - lawyer: privacy, PII, data collection, payments, compliance, regulation, contracts,
+                consumer protection, legal agreements, liability, terms of service
+      - economist: pricing, revenue, conversion rates, ROI, cost reduction, business case,
+                   demand, market share, monetization, cost-benefit, economic incentives
+      - anthropologist: user behavior patterns, cultural context, travel rituals, social dynamics,
+                        personas, habits, community, identity, group behavior, life events
+      - psychologist: trust, anxiety, cognitive load, mental models, motivation, habit formation,
+                      onboarding, fear, decision-making, emotional response, UX friction
+
+      Output ONLY a comma-separated list of selected lens names, nothing else.
+      Examples: "lawyer,economist" or "anthropologist,psychologist" or "economist"
+
+      Story data: {{story_data}}
+      Comments: {{comments}}
+    output: "selected_lenses"
+
+  - id: "analyst-lawyer"
+    type: "agent"
+    condition: "'lawyer' in selected_lenses"
+    prompt: |
+      Apply a legal/compliance lens to this user story.
+      Focus on: privacy/PII risks, regulatory requirements, third-party constraints,
+      liability exposure. Flag what needs legal review before shipping.
+
+      3-5 specific, actionable observations. PM-readable, not academic.
+
+      Reference: amplifier-bundle/skills/lawyer-analyst/QUICK_REFERENCE.md
+
+      Story data: {{story_data}}
+    output: "lawyer_perspective"
+
+  - id: "analyst-economist"
+    type: "agent"
+    condition: "'economist' in selected_lenses"
+    prompt: |
+      Apply an economics lens to this user story.
+      Focus on: whether the acceptance criteria drive real economic outcomes, incentive
+      alignment, unintended effects, whether the metric choice captures value.
+
+      3-5 specific, actionable observations. PM-readable, not academic.
+
+      Reference: amplifier-bundle/skills/economist-analyst/QUICK_REFERENCE.md
+
+      Story data: {{story_data}}
+    output: "economist_perspective"
+
+  - id: "analyst-anthropologist"
+    type: "agent"
+    condition: "'anthropologist' in selected_lenses"
+    prompt: |
+      Apply an anthropological lens to this user story.
+      Focus on: whether the persona and behavior assumptions reflect actual user patterns,
+      cultural/social context of the use case, whether the story captures the real lived
+      experience vs. an idealized model.
+
+      3-5 specific, actionable observations. PM-readable, not academic.
+
+      Reference: amplifier-bundle/skills/anthropologist-analyst/QUICK_REFERENCE.md
+
+      Story data: {{story_data}}
+    output: "anthropologist_perspective"
+
+  - id: "analyst-psychologist"
+    type: "agent"
+    condition: "'psychologist' in selected_lenses"
+    prompt: |
+      Apply a psychology lens to this user story.
+      Focus on: user trust, cognitive load, mental models being assumed, motivation
+      structures, emotional friction points in the acceptance criteria.
+
+      3-5 specific, actionable observations. PM-readable, not academic.
+
+      Reference: amplifier-bundle/skills/psychologist-analyst/QUICK_REFERENCE.md
+
+      Story data: {{story_data}}
+    output: "psychologist_perspective"
+
+  - id: "compile-analyst-summary"
+    type: "agent"
+    prompt: |
+      Compile the analyst perspectives below into a single concise advisory block
+      (max 200 words). Only include lenses that produced findings.
+      Group by lens. If no perspectives were selected, output exactly:
+      "No analyst perspectives selected for this story."
+
+      Lenses selected: {{selected_lenses}}
+      Lawyer: {{lawyer_perspective}}
+      Economist: {{economist_perspective}}
+      Anthropologist: {{anthropologist_perspective}}
+      Psychologist: {{psychologist_perspective}}
+    output: "analyst_summary"
+
+  # Phase 3: Agent grading (MCP for wiki/template enrichment, agent judgment for grading)
   - id: "grade-story"
     type: "agent"
+    agent: "amplihack:ado-story-architect"
     prompt: |
       Grade this story across five dimensions (A-F):
       1. Template compliance — does it follow the Alaska story template?
@@ -59,6 +167,9 @@ steps:
       Use MCP to check parent feature for alignment.
 
       Reference checklist: amplifier-bundle/skills/common/checklists/ado/ado-story-architect.md
+
+      Analyst perspectives (advisory — use to deepen analysis, not as separate dimensions):
+      {{analyst_summary}}
 
       Story data: {{story_data}}
       Comments: {{comments}}

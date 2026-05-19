@@ -95,8 +95,8 @@ def execute_wiql_query(
         SystemExit: If query fails
     """
     # Execute query
-    result = wrapper.devops_command(
-        ["boards", "query", "--wiql", wiql, "--output", "json"], timeout=60
+    result = wrapper.boards_command(
+        ["query", "--wiql", wiql, "--output", "json"], timeout=60
     )
 
     if not result.success:

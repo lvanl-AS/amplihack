@@ -15,13 +15,19 @@ context:
   meta_findings: ""
   grade_card: ""
   user_action: ""
+  selected_lenses: ""
+  lawyer_perspective: ""
+  economist_perspective: ""
+  anthropologist_perspective: ""
+  psychologist_perspective: ""
+  analyst_summary: ""
 
 steps:
   # Phase 2: Deterministic fetch
   - id: "fetch-feature"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/get_work_item.py \
+      python3 .claude/scenarios/az-devops-tools/get_work_item.py \
         --id {{work_item_id}} \
         --workspace "{{selected_workspace}}" \
         --relations --format json
@@ -30,7 +36,7 @@ steps:
   - id: "fetch-comments"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/get_comments.py \
+      python3 .claude/scenarios/az-devops-tools/get_comments.py \
         --id {{work_item_id}} \
         --workspace "{{selected_workspace}}" \
         --format json
@@ -39,7 +45,7 @@ steps:
   - id: "fetch-revisions"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/get_revisions.py \
+      python3 .claude/scenarios/az-devops-tools/get_revisions.py \
         --id {{work_item_id}} \
         --workspace "{{selected_workspace}}" \
         --format json
@@ -48,7 +54,7 @@ steps:
   - id: "fetch-child-stories"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/query_wiql.py \
+      python3 .claude/scenarios/az-devops-tools/query_wiql.py \
         --workspace "{{selected_workspace}}" \
         --wiql "SELECT [System.Id],[System.Title],[System.State] \
           FROM WorkItemLinks WHERE [Source].[System.Id] = {{work_item_id}} \
@@ -57,9 +63,117 @@ steps:
         --format json
     output: "child_stories"
 
-  # Phase 2: Six-dimension grading
+  # Phase 2b: Smart analyst lens selection + parallel perspectives
+  - id: "select-analyst-lenses"
+    type: "agent"
+    prompt: |
+      Based on this feature's content, select which analyst lenses are most relevant.
+      Be selective — only choose lenses where the content genuinely warrants that perspective.
+      Choose 1-3 lenses maximum.
+
+      Lenses and their triggers:
+      - lawyer: privacy, PII, data collection, payments, compliance, regulation, contracts,
+                consumer protection, legal agreements, liability, terms of service
+      - economist: pricing, revenue, conversion rates, ROI, cost reduction, business case,
+                   demand, market share, monetization, cost-benefit, economic incentives
+      - anthropologist: user behavior patterns, cultural context, travel rituals, social dynamics,
+                        personas, habits, community, identity, group behavior, life events
+      - psychologist: trust, anxiety, cognitive load, mental models, motivation, habit formation,
+                      onboarding, fear, decision-making, emotional response, UX friction
+
+      Output ONLY a comma-separated list of selected lens names, nothing else.
+      Examples: "lawyer,economist" or "anthropologist,psychologist" or "economist"
+
+      Feature data: {{feature_data}}
+      Comments: {{comments}}
+    output: "selected_lenses"
+
+  - id: "analyst-lawyer"
+    type: "agent"
+    condition: "'lawyer' in selected_lenses"
+    prompt: |
+      Apply a legal/compliance lens to this feature.
+      Focus on: privacy/PII risks, regulatory requirements (aviation, consumer protection,
+      data residency), third-party contractual constraints, liability exposure.
+
+      3-5 specific, actionable observations. Flag what needs legal review before shipping.
+      Be direct and PM-readable — not academic.
+
+      Reference: amplifier-bundle/skills/lawyer-analyst/QUICK_REFERENCE.md
+
+      Feature data: {{feature_data}}
+    output: "lawyer_perspective"
+
+  - id: "analyst-economist"
+    type: "agent"
+    condition: "'economist' in selected_lenses"
+    prompt: |
+      Apply an economics lens to this feature.
+      Focus on: incentive structures, demand-side reasoning, opportunity cost, whether
+      the business case holds up, whether the proposed metrics capture real economic value,
+      potential unintended economic effects (cannibalization, price anchoring, etc.).
+
+      3-5 specific, actionable observations.
+      Be direct and PM-readable — not academic.
+
+      Reference: amplifier-bundle/skills/economist-analyst/QUICK_REFERENCE.md
+
+      Feature data: {{feature_data}}
+    output: "economist_perspective"
+
+  - id: "analyst-anthropologist"
+    type: "agent"
+    condition: "'anthropologist' in selected_lenses"
+    prompt: |
+      Apply an anthropological lens to this feature.
+      Focus on: whether user behavior assumptions reflect actual behavioral patterns,
+      cultural/social context of the use case, travel rituals and identity, group dynamics,
+      whether the Without/With framing is grounded in real ethnographic reality.
+
+      3-5 specific, actionable observations.
+      Be direct and PM-readable — not academic.
+
+      Reference: amplifier-bundle/skills/anthropologist-analyst/QUICK_REFERENCE.md
+
+      Feature data: {{feature_data}}
+    output: "anthropologist_perspective"
+
+  - id: "analyst-psychologist"
+    type: "agent"
+    condition: "'psychologist' in selected_lenses"
+    prompt: |
+      Apply a psychology lens to this feature.
+      Focus on: user trust, anxiety reduction/introduction, cognitive load, mental models
+      being assumed vs. actual, motivation structures, habit formation, emotional responses
+      at key moments in the user journey.
+
+      3-5 specific, actionable observations.
+      Be direct and PM-readable — not academic.
+
+      Reference: amplifier-bundle/skills/psychologist-analyst/QUICK_REFERENCE.md
+
+      Feature data: {{feature_data}}
+    output: "psychologist_perspective"
+
+  - id: "compile-analyst-summary"
+    type: "agent"
+    prompt: |
+      Compile the analyst perspectives below into a single concise advisory block
+      (max 200 words). Only include lenses that produced findings.
+      Group by lens. If no perspectives were selected, output exactly:
+      "No analyst perspectives selected for this feature."
+
+      Lenses selected: {{selected_lenses}}
+      Lawyer: {{lawyer_perspective}}
+      Economist: {{economist_perspective}}
+      Anthropologist: {{anthropologist_perspective}}
+      Psychologist: {{psychologist_perspective}}
+    output: "analyst_summary"
+
+  # Phase 3: Six-dimension grading
   - id: "grade-feature"
     type: "agent"
+    agent: "amplihack:ado-feature-author"
     prompt: |
       Grade this feature across six dimensions (A-F):
 
@@ -77,6 +191,9 @@ steps:
       - amplifier-bundle/skills/common/checklists/ado/ado-feature-author.md
       - amplifier-bundle/skills/common/checklists/ado/ado-metrics-coach.md
       - amplifier-bundle/skills/common/checklists/ado/ado-story-architect.md
+
+      Analyst perspectives (advisory — use to deepen analysis, not as separate dimensions):
+      {{analyst_summary}}
 
       Feature data: {{feature_data}}
       Comments: {{comments}}

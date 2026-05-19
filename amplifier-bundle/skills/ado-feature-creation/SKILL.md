@@ -1,11 +1,12 @@
 ---
 name: ado-feature-creation
 description: |
-  Conversational feature creation with value stress-test and slicability check.
-  Guides PMs through strategic context, value validation, sequential drafting
-  (description -> stakeholders -> wins -> quality measures -> AC -> metrics ->
-  OKR -> slicability -> title), iteration, and pre-commit review.
-version: 1.0.0
+  Conversational feature creation with dynamic template drafting, coherence
+  testing, and business outcome qualification. Understands the feature first,
+  drafts sections in parallel from the live ADO template, then runs quality
+  gates (technical prescription guard, coherence test, business outcomes,
+  analyst lenses) before user review.
+version: 2.0.0
 type: skill
 auto_activate_keywords:
   - create feature
@@ -18,6 +19,8 @@ tools_required:
   - .claude/scenarios/az-devops-tools/create_work_item.py
   - .claude/scenarios/az-devops-tools/query_wiql.py
   - .claude/scenarios/az-devops-tools/link_parent.py
+  - .claude/scenarios/az-devops-tools/get_templates.py
+  - .claude/scenarios/az-devops-tools/fill_template.py
 supporting_docs:
   - ../common/templates/reference_alaska_feature_template.md
   - ../common/templates/reference_alaska_story_template.md
@@ -25,6 +28,7 @@ supporting_docs:
   - ../common/checklists/ado/ado-feature-author.md
   - ../common/checklists/ado/ado-metrics-coach.md
   - ../common/checklists/ado/ado-story-architect.md
+  - ../../recipes/ado-feature-section-profiles.yaml
 ---
 
 # ADO Feature Creation Skill
@@ -40,10 +44,11 @@ Activate when the user:
 
 ## Execution
 
-Board selection runs before the recipe so the recipe runner never needs TTY access:
+Board selection runs before the recipe so the recipe runner never needs TTY access.
 
 ```bash
 WORKSPACE=$(python .claude/scenarios/az-devops-tools/select_board.py)
+
 amplihack recipe run amplifier-bundle/recipes/ado-feature-creation.yaml \
   -c selected_workspace="$WORKSPACE" \
   -c user_input="<user's feature idea>"
@@ -51,30 +56,44 @@ amplihack recipe run amplifier-bundle/recipes/ado-feature-creation.yaml \
 
 ## Recipe
 
-This skill is driven by the `ado-feature-creation` recipe.
+This skill is driven by the `ado-feature-creation` recipe (v2).
 
 ## Workflow
 
-1. **Silent context** — Auth check + load feature template
-2. **Duplicate detection** — WIQL search for similar features
-4. **Parent epic/initiative resolution** — Find parent Epic if applicable. Unparented is fine
-5. **Figma check** — Conditional on frontend signals
-6. **Value stress-test** — Non-optional. Not adversarial — helps PM sharpen pitch before leadership. 2-3 observations, not an interrogation
-7. **Sequential draft** (order enforced by recipe runner):
-   - Description (WHAT + WHY with Without/With contrast framing)
-   - Stakeholders (always asked, never invented)
-   - Three-audience Wins (Guest, Business, Tech — all three required)
-   - Quality measures (guardrails — "no increase in X")
-   - Acceptance criteria (functional, traceable to description)
-   - Outcome metrics (North Star + 2-3 leading indicators, research-backed)
-   - OKR alignment (quick check, never blocks)
-8. **Slicability check** — 3-7 candidate story titles as a thinking aid. Not a commitment, not a plan. Flags if too vague (<3) or too big (8+)
-9. **Title** — Derived from body
-10. **Iterate with user** — Multi-round editing
-11. **Consistency validation** — AC to description, metrics to AC, all Win audiences, Without/With framing
-12. **Pre-commit review** — Final quality gate with perspective coverage
-13. **Write to ADO** — Create Feature, link parent, post candidate stories and warnings as comments
-14. **Reflection** — Store discovery in Kuzu
+### Phase 1: Understand
+1. **Auth check** — Silent workspace verification
+2. **Understand feature** — Conversational exploration of the idea. Not drafting yet.
+3. **Identify stakeholders** — Explicit ask. Never invented. Shapes all downstream drafting.
+4. **Seed business outcome** — Lightweight ask: "What outcome are you hoping for?" 1-2 sentences, refined later.
+5. **Resolve parent** — Epic/Initiative lookup if applicable. Standalone is fine.
+
+### Phase 2: Template Discovery
+6. **Load template** — Fetch live Feature template from ADO
+7. **Discover sections** — Parse template to find section headers dynamically
+8. **Map sections to agents** — Match sections to profiles (exact, fuzzy, or generic fallback). See `ado-feature-section-profiles.yaml`
+
+### Phase 3: Parallel Drafting
+9. **Draft all sections** — All sections drafted from the same inputs (feature brief + stakeholders + seed outcome + parent context). Sections are independent.
+10. **OKR alignment** — Quick check, runs alongside drafting. Never blocks.
+
+### Phase 4: Quality Gates
+11. **Technical prescription guard** — Strip code-level solutions, specific repos, implementation details. Features say WHAT and HOW WE KNOW WE'RE DONE, not HOW TO BUILD IT.
+12. **Coherence test** — All sections reviewed together. Do they tell one consistent story? Conflicts presented to user.
+13. **Business outcomes & metrics** — Refine seed outcome, quantify where possible, propose North Star + leading indicators.
+14. **Analyst lenses** — Select 1-3 relevant perspectives (lawyer, economist, anthropologist, psychologist), dispatch, compile advisory.
+
+### Phase 5: User Review + Late Checks
+15. **Present draft** — Full feature with analyst advisory. Multi-round iteration until "looks good."
+16. **Generate title** — Derived from approved body, follows template convention.
+17. **Slicability check** — 3-7 candidate story titles as a thinking aid. Flags too vague (<3) or too big (8+).
+18. **Duplicate check** — WIQL search with full ticket context (better results than early search).
+19. **Figma check** — Conditional on frontend signals.
+
+### Phase 6: Save
+20. **Pre-commit review** — Final quality gate. Soft warnings. Save / fix / cancel.
+21. **Template fill** — Deterministic HTML assembly via fill_template.py
+22. **Create in ADO** — Feature creation, parent linking, candidate stories + warnings as comments
+23. **Reflection** — Store discovery including fuzzy-match signals (template drift detection)
 
 ## Key Behaviors
 
@@ -82,11 +101,19 @@ This skill is driven by the `ado-feature-creation` recipe.
 - PM has final say — never hard-refuse. Soft warnings, audit trail
 - WHY must use Without/With contrast framing (team convention)
 - Stakeholders always asked, never invented
-- All three Win audiences must be covered
+- All Win audiences must be covered
 - No delivery estimates — sizing is the team's job
-- Value stress-test is mandatory, not opt-in
-- Slicability is a thinking aid — titles only, no full stories
+- No technical prescriptions — features don't name repos or prescribe implementation
+- Sections drafted independently, coherence verified explicitly
+- Template sections discovered dynamically — new sections get drafted via fuzzy-matched or generic prompts
 - Write for leadership as the audience
+
+## Section Profiles
+
+Section-to-agent mappings live in `amplifier-bundle/recipes/ado-feature-section-profiles.yaml`. When the ADO template changes:
+- New sections: auto-drafted via fuzzy match to nearest known profile, or generic fallback
+- Removed sections: silently skipped (no breakage)
+- Renamed sections: fuzzy-matched if similar enough, otherwise generic. Add a profile entry for best results.
 
 ## Cross-References
 

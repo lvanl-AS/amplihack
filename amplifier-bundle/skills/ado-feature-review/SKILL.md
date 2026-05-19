@@ -17,6 +17,8 @@ tools_required:
   - .claude/scenarios/az-devops-tools/get_revisions.py
   - .claude/scenarios/az-devops-tools/query_wiql.py
   - .claude/scenarios/az-devops-tools/update_work_item.py
+  - .claude/scenarios/az-devops-tools/get_templates.py
+  - .claude/scenarios/az-devops-tools/fill_template.py
 supporting_docs:
   - ../common/templates/reference_alaska_feature_template.md
   - ../common/checklists/ado/ado-feature-author.md
@@ -38,10 +40,11 @@ Activate when the user:
 
 ## Execution
 
-Board selection runs before the recipe so the recipe runner never needs TTY access:
+Board selection runs before the recipe so the recipe runner never needs TTY access.
 
 ```bash
 WORKSPACE=$(python .claude/scenarios/az-devops-tools/select_board.py)
+
 amplihack recipe run amplifier-bundle/recipes/ado-feature-review.yaml \
   -c selected_workspace="$WORKSPACE" \
   -c work_item_id="<feature ID>"

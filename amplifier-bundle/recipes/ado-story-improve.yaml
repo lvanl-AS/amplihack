@@ -27,39 +27,118 @@ steps:
       echo "Context validated — review data present."
     output: "context_valid"
 
-  # Draft improvements and write approved content to temp files
-  # Agent does NOT write to ADO — it writes to temp files only
+  # Fetch the Story template for deterministic HTML assembly
+  - id: "load-template"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_templates.py \
+        --type "User Story" \
+        --workspace "{{selected_workspace}}" \
+        --fields-only \
+        | tee /tmp/ado_story_{{work_item_id}}_template.json
+    output: "story_template"
+
+  # Fetch current work item fields to know what exists
+  - id: "fetch-current-fields"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_work_item.py \
+        --id {{work_item_id}} \
+        --workspace "{{selected_workspace}}" \
+        --fields "System.Description,Microsoft.VSTS.Common.AcceptanceCriteria" \
+        --format json
+    output: "current_fields"
+
+  # Draft improvements — agent outputs sections JSON, not raw HTML
   - id: "improve-story"
     type: "agent"
     prompt: |
       Using the review findings, draft improvements to this story.
 
+      The current work item content:
+      {{current_fields}}
+
+      The template structure (for section reference):
+      {{story_template}}
+
       For each dimension graded below B:
-      - Show the before/after for the specific field
+      - Show the before/after for the specific section
       - Explain what was wrong and how the fix addresses it
 
       Present all proposed changes to the user for approval.
 
       Once the user approves (or requests edits), write the final approved content
-      to these temp files — HTML format for both:
-        /tmp/ado_story_{{work_item_id}}_description.html   (System.Description)
-        /tmp/ado_story_{{work_item_id}}_ac.html            (Microsoft.VSTS.Common.AcceptanceCriteria)
+      to this file:
 
-      Only write the fields that actually changed. If a field is unchanged, do not
-      create its temp file — the bash commit step skips missing files.
+        /tmp/ado_story_{{work_item_id}}_sections.json
+
+      Format — include ALL sections (improved + unchanged):
+      {
+        "System.Description": {
+          "preamble": "<improved or existing connextra user story>",
+          "_preserve": ["dor_reminders", "dod_reminders"]
+        },
+        "Microsoft.VSTS.Common.AcceptanceCriteria": {
+          "outcome": "<improved or existing>",
+          "additional_context": "<improved or existing testable requirements>",
+          "_preserve": ["release_readiness", "guest_impact", "systems_touched",
+                        "end-to-end_validation", "regression_coverage",
+                        "failure_scenarios", "production_detection",
+                        "rollback_/_mitigation", "post-release_monitoring"]
+        }
+      }
+
+      Content can be markdown — the fill tool converts to HTML automatically.
+      The _preserve arrays tell the tool to keep team checklists from the template.
+      Only include fields that have content. If a field (Description or AC) was
+      not changed, omit its key entirely so the commit step knows to skip it.
 
       Output a one-line summary of what was written, e.g.:
-        "Wrote: description, ac"
+        "Wrote sections: description (preamble), ac (outcome, additional_context)"
 
       Work item: #{{work_item_id}}
       Grade card: {{grade_card}}
       Grading details: {{grading_results}}
 
       Do NOT call any MCP tools or update_work_item.py directly.
-      The commit step handles all writes to ADO.
+      Do NOT write HTML files — the fill-template step handles that.
     output: "improvements_staged"
 
-  # Deterministic commit — reads temp files and calls update_work_item.py
+  # Deterministic HTML assembly from template + improved sections
+  - id: "fill-template"
+    type: "bash"
+    command: |
+      SECTIONS="/tmp/ado_story_{{work_item_id}}_sections.json"
+      TEMPLATE="/tmp/ado_story_{{work_item_id}}_template.json"
+
+      if [ ! -f "$SECTIONS" ]; then
+        echo "No sections file — nothing to fill."
+        exit 0
+      fi
+      if [ ! -f "$TEMPLATE" ]; then
+        echo "No template file — cannot fill."
+        exit 1
+      fi
+
+      python3 .claude/scenarios/az-devops-tools/fill_template.py \
+        --template-file "$TEMPLATE" \
+        --sections-file "$SECTIONS" \
+        --output-dir /tmp/ado_story_{{work_item_id}}_filled/
+
+      # Move to expected paths for commit step
+      [ -f /tmp/ado_story_{{work_item_id}}_filled/description.html ] && \
+        mv /tmp/ado_story_{{work_item_id}}_filled/description.html \
+           /tmp/ado_story_{{work_item_id}}_description.html
+      [ -f /tmp/ado_story_{{work_item_id}}_filled/ac.html ] && \
+        mv /tmp/ado_story_{{work_item_id}}_filled/ac.html \
+           /tmp/ado_story_{{work_item_id}}_ac.html
+
+      echo "Template filled."
+      ls -la /tmp/ado_story_{{work_item_id}}_description.html \
+             /tmp/ado_story_{{work_item_id}}_ac.html 2>/dev/null
+    output: "template_filled"
+
+  # Deterministic commit — reads filled HTML and calls update_work_item.py
   - id: "commit-improvements"
     type: "bash"
     command: |
@@ -71,7 +150,7 @@ steps:
         exit 0
       fi
 
-      ARGS=(--id {{work_item_id}} --workspace "{{selected_workspace}}")
+      ARGS=(--id {{work_item_id}} --workspace "{{selected_workspace}}" --no-format)
 
       if [ -f "$DESC_FILE" ]; then
         DESCRIPTION=$(cat "$DESC_FILE")
@@ -84,15 +163,18 @@ steps:
       fi
 
       echo "Committing improvements to ADO work item #{{work_item_id}}..."
-      python .claude/scenarios/az-devops-tools/update_work_item.py "${ARGS[@]}"
+      python3 .claude/scenarios/az-devops-tools/update_work_item.py "${ARGS[@]}"
     output: "commit_result"
 
   # Cleanup temp files
   - id: "cleanup-temp"
     type: "bash"
     command: |
+      rm -f /tmp/ado_story_{{work_item_id}}_sections.json
+      rm -f /tmp/ado_story_{{work_item_id}}_template.json
       rm -f /tmp/ado_story_{{work_item_id}}_description.html
       rm -f /tmp/ado_story_{{work_item_id}}_ac.html
+      rm -rf /tmp/ado_story_{{work_item_id}}_filled/
       echo "Temp files cleaned up."
     output: "cleanup_done"
 
@@ -100,7 +182,7 @@ steps:
   - id: "verify-update"
     type: "bash"
     command: |
-      python .claude/scenarios/az-devops-tools/get_work_item.py \
+      python3 .claude/scenarios/az-devops-tools/get_work_item.py \
         --id {{work_item_id}} \
         --workspace "{{selected_workspace}}" \
         --fields "System.Title,System.Description,Microsoft.VSTS.Common.AcceptanceCriteria" \
