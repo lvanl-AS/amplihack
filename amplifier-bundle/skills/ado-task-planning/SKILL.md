@@ -1,10 +1,11 @@
 ---
 name: ado-task-planning
 description: |
-  Decomposes an existing ADO User Story into actionable sprint tasks. Maps each
-  task to acceptance criteria, flags gaps in testing/observability/rollout, and
-  creates all tasks in ADO with parent links.
-version: 1.0.0
+  Decomposes an existing ADO User Story into actionable sprint tasks. Uses
+  story-architect and metrics-coach for understanding, task-planner for
+  AC-covering decomposition, and technical-advisor for implicit work areas.
+  Tasks inherit parent story fields (iteration, area). 50-char title limit.
+version: 2.0.0
 type: skill
 auto_activate_keywords:
   - plan tasks
@@ -15,8 +16,13 @@ auto_activate_keywords:
 tools_required:
   - .claude/scenarios/az-devops-tools/auth_check.py
   - .claude/scenarios/az-devops-tools/get_work_item.py
+  - .claude/scenarios/az-devops-tools/create_template_tasks.py
   - .claude/scenarios/az-devops-tools/create_work_item.py
-  - .claude/scenarios/az-devops-tools/link_parent.py
+agents:
+  - amplifier-bundle/agents/specialized/ado-story-architect.md
+  - amplifier-bundle/agents/specialized/ado-metrics-coach.md
+  - amplifier-bundle/agents/specialized/ado-task-planner.md
+  - amplifier-bundle/agents/specialized/ado-technical-advisor.md
 supporting_docs:
   - ../common/templates/reference_alaska_story_template.md
   - ../common/checklists/ado/ado-story-architect.md
@@ -24,7 +30,7 @@ supporting_docs:
 
 # ADO Task Planning Skill
 
-Decomposes an existing User Story into actionable sprint tasks. Tasks always have a parent story.
+Decomposes an existing User Story into actionable sprint tasks. Tasks always have a parent story and inherit its iteration and area path.
 
 ## When to Activate
 
@@ -52,24 +58,27 @@ This skill is driven by the `ado-task-planning` recipe.
 ## Workflow
 
 1. **Auth + fetch** — Verify auth, fetch parent story with relations
-2. **Validate parent type** — Must be a User Story. If Feature/Bug/Epic, redirect: "Tasks live under stories. Want to find a story under this, or create one with ado-story-creation?"
-3. **Decompose** — 4-8 tasks, each with action-oriented title, 1-3 line description, AC mapping
-5. **Anti-pattern critique** — Flags missing testing/observability/rollout tasks. High-level only, advisory
-6. **Iterate with user** — Split, merge, add, drop, retitle tasks
-7. **Sprint placement** — Agent uses MCP `work_list_team_iterations` for iteration options. Defaults to parent story's iteration
+2. **Validate + create template tasks** — Validate parent is a User Story, then create mandatory template tasks (CR, PR, Documentation, DOD, RFA) in ADO immediately with inherited iteration/area
+3. **Understand** — `ado-story-architect` (structure, AC quality, gaps) and `ado-metrics-coach` (observability/metrics gaps)
+4. **Decompose (AC tasks)** — `ado-task-planner` produces story-specific work-area tasks covering all acceptance criteria. Titles ≤50 chars.
+5. **Technical discussion** — `ado-technical-advisor` surfaces implicit technical work areas not covered by AC tasks. Discusses with user — user decides what gets added.
+6. **Anti-pattern critique** — Reviews full task list for: too-specific tasks, tasks that are actually stories, tasks too broad, titles over 50 chars. Advisory only.
+7. **Iterate with user** — Split, merge, add, drop, retitle tasks. 50-char title limit enforced.
 8. **Approval gate** — "Ready to create N tasks under story #X?"
-9. **Write to ADO** — Create each task, link to parent, set iteration. Post summary comment on parent story as audit trail
-10. **Reflection** — Store discovery in Kuzu
+9. **Write to ADO** — Create each task, inherit parent iteration/area, link to parent. Post summary comment on parent story as audit trail.
+10. **Reflection** — Store discovery
 
 ## Key Behaviors
 
 - Tasks always have a parent story — never free-floating
+- Tasks inherit iteration path and area path from parent story
+- Template tasks (CR, PR, Documentation, DOD, RFA) are created in ADO immediately — before any agent work
 - No sizing ever — no points, T-shirts, or hours. Sizing is the team's job
-- High-level decomposition only — describe the WHAT, never the HOW
-- No code references, no file paths, no implementation prescriptions
-- Every task maps to at least one AC — unmapped = scope creep flag
-- Anti-pattern flags are advisory only: missing testing, observability, rollout tasks
-- Multi-write — creates multiple work items in one go
+- Tasks are work areas, not implementation specs — general enough for a PM to read
+- Title limit: 50 characters or less, no exceptions
+- AC coverage: every acceptance criterion must have at least one task covering it
+- Technical work areas surfaced as a discussion, not added automatically
+- Anti-pattern flags are advisory only
 - Post summary comment on parent story with all task IDs as audit trail
 
 ## Cross-References

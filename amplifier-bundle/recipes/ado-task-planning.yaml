@@ -1,6 +1,6 @@
 name: "ado-task-planning"
 description: "Decompose a user story into actionable sprint tasks"
-version: "1.0.0"
+version: "2.0.0"
 author: "Amplihack Team"
 tags: ["ado", "tasks", "planning"]
 
@@ -9,15 +9,21 @@ context:
   work_item_id: ""
   auth_status: ""
   story_data: ""
-  parent_feature_context: ""
-  task_breakdown: ""
+  template_tasks_created: ""
+  story_understanding: ""
+  metrics_understanding: ""
+  ac_task_list: ""
+  technical_discussion_result: ""
   anti_pattern_flags: ""
   final_task_list: ""
-  target_iteration: ""
   user_approval: ""
+  created_tasks: ""
+  reflection: ""
 
 steps:
-  # Phase 1: Auth check against selected workspace
+  # --- Bash steps first: prove value fast, catch errors early ---
+
+  # Step 1: Auth check
   - id: "auth-check"
     type: "bash"
     command: |
@@ -25,6 +31,7 @@ steps:
         --workspace "{{selected_workspace}}" --quiet
     output: "auth_status"
 
+  # Step 2: Fetch parent story with relations
   - id: "fetch-parent-story"
     type: "bash"
     command: |
@@ -34,93 +41,111 @@ steps:
         --relations --format json
     output: "story_data"
 
-  - id: "validate-parent-type"
+  # Step 3: Validate parent is a User Story + create mandatory template tasks
+  # Validates type, fetches Task templates, creates each one on the story
+  # with inherited iteration/area. Done before any agent work.
+  - id: "create-template-tasks"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/create_template_tasks.py \
+        --parent-id {{work_item_id}} \
+        --workspace "{{selected_workspace}}"
+    output: "template_tasks_created"
+
+  # --- Agent steps: understanding, decomposition, discussion ---
+
+  # Step 4a: Understand — story architect
+  - id: "understand-story"
     type: "agent"
+    agent: "ado-story-architect"
     prompt: |
-      Verify this work item is a User Story.
-      If it's a Feature, Bug, or Epic, redirect:
-      "Tasks always live under a User Story. This is a [type].
-      Want to find a story under it, or create one with ado-story-creation?"
-
-      If it IS a story, fetch the parent feature via MCP for context.
-
-      Work item: {{story_data}}
-    output: "parent_feature_context"
-
-  # Phase 2: Decompose
-  - id: "decompose"
-    type: "agent"
-    prompt: |
-      Decompose this story into 4-8 tasks.
-
-      Each task: action-oriented title (verb + object),
-      1-3 line description, AC mapping.
-
-      Rules:
-      - Describe the WHAT, never the HOW. No code references,
-        no file paths, no specific technical solutions.
-      - No sizing. No points, T-shirts, or hours. Ever.
-      - Every task maps to at least one AC. Unmapped = scope creep flag.
-      - If <4 tasks without one feeling huge, story is probably
-        too big — flag it.
+      Review this story for structure, AC quality, and gaps.
+      Provide your analysis — this will feed into task decomposition.
 
       Story: {{story_data}}
-      Parent feature: {{parent_feature_context}}
-    output: "task_breakdown"
+    output: "story_understanding"
 
-  # Phase 4: Anti-pattern critique
+  # Step 4b: Understand — metrics coach
+  - id: "understand-metrics"
+    type: "agent"
+    agent: "ado-metrics-coach"
+    prompt: |
+      Review this story for observability and metrics gaps.
+      Provide your analysis — this will feed into task decomposition.
+
+      Story: {{story_data}}
+    output: "metrics_understanding"
+
+  # Step 5: Decompose — AC-covering tasks
+  - id: "decompose-ac-tasks"
+    type: "agent"
+    agent: "ado-task-planner"
+    prompt: |
+      Decompose this story into work-area tasks that cover the
+      acceptance criteria. Template tasks (CR, PR, Documentation, DOD, RFA)
+      have already been created in ADO — focus on story-specific work areas only.
+
+      Story: {{story_data}}
+      Story understanding: {{story_understanding}}
+      Metrics understanding: {{metrics_understanding}}
+    output: "ac_task_list"
+
+  # Step 6: Technical work area discussion
+  - id: "technical-discussion"
+    type: "agent"
+    agent: "ado-technical-advisor"
+    prompt: |
+      Review the story and current task list. Surface implicit
+      technical work areas not covered by the current tasks.
+      Discuss with the user — they decide what gets added.
+
+      Story: {{story_data}}
+      Story understanding: {{story_understanding}}
+      Metrics understanding: {{metrics_understanding}}
+      Current tasks: {{ac_task_list}}
+    output: "technical_discussion_result"
+
+  # Step 7: Anti-pattern critique
   - id: "anti-pattern-check"
     type: "agent"
     prompt: |
-      Review the task breakdown for common gaps. Flag (high-level only):
-      1. Missing testing task — no test work at all
-      2. Missing observability task — no analytics/logging/dashboard
-         (especially if story has a Metrics section)
-      3. Missing rollout task — no feature flag/staged rollout/rollback
-         (especially for user-facing changes)
-      4. Task feels too broad — spans many concerns, suggest splitting
-      5. Task is actually a story — describes a behavior outcome,
-         not an implementation step
+      Review the full task list (AC tasks + any user-approved
+      technical tasks) for anti-patterns:
+      1. Task is too specific — names technologies or implementations
+      2. Task is actually a story — describes behavior, not work area
+      3. Task is too broad — spans too many concerns
+      4. Title over 50 characters
 
       0-3 soft warnings in plain English. Advisory only.
-      Do NOT reference specific code, files, or technical solutions.
 
-      Tasks: {{task_breakdown}}
+      AC-covering tasks: {{ac_task_list}}
+      Technical discussion (may include additional tasks): {{technical_discussion_result}}
       Story: {{story_data}}
     output: "anti_pattern_flags"
 
-  # Phase 5: Iterate with user
+  # Step 8: Iterate with user
   - id: "iterate-with-user"
     type: "agent"
     prompt: |
-      Present the task breakdown as a clear scannable block:
-      - Numbered tasks with title, description, AC mapping
-      - Anti-pattern flags as "things worth noting"
-      - "Sizing comes later — your team handles that in planning."
+      Present the final task list as a clear scannable block.
+      Combine the AC-covering tasks with any user-approved tasks
+      from the technical discussion into a single list.
+      Include anti-pattern flags as "things worth noting."
 
       User can: split, merge, add, drop, retitle tasks.
+      Template tasks (CR, PR, Documentation, DOD, RFA) are already
+      created in ADO — they are not listed here.
+      Enforce 50-char title limit on any changes.
       Loop until happy.
 
-      Tasks: {{task_breakdown}}
+      "Sizing comes later — your team handles that in planning."
+
+      AC-covering tasks: {{ac_task_list}}
+      Technical discussion: {{technical_discussion_result}}
       Flags: {{anti_pattern_flags}}
     output: "final_task_list"
 
-  # Phase 6: Sprint placement (MCP for iterations)
-  - id: "sprint-placement"
-    type: "agent"
-    prompt: |
-      Tasks default to the parent story's iteration.
-      Use MCP (work_list_team_iterations) to get available iterations.
-
-      Ask: "These will go in [parent's iteration]. Sound right,
-      or should they go in a different sprint?"
-
-      Options: inherit parent / different iteration / backlog only.
-
-      Story: {{story_data}}
-    output: "target_iteration"
-
-  # Phase 7: Final approval
+  # Step 9: Final approval
   - id: "approval-gate"
     type: "agent"
     prompt: |
@@ -132,39 +157,36 @@ steps:
       User cancels -> return to iteration.
 
       Tasks: {{final_task_list}}
-      Sprint: {{target_iteration}}
     output: "user_approval"
 
-  # Phase 8: Write to ADO
+  # Step 10: Write to ADO
   - id: "write-tasks"
     type: "agent"
     condition: "'confirm' in user_approval.lower()"
     prompt: |
-      Create each task in ADO:
-      1. Use create_work_item.py (type: Task) for each task
-      2. Link each to parent story via link_parent.py
-      3. Set iteration path if specified
-      4. No sizing fields — leave blank
+      Create each task in ADO using create_work_item.py:
+      1. For each task: --type Task --title "..." --parent {{work_item_id}} --workspace "{{selected_workspace}}"
+      2. Extract iteration and area from the parent story data and pass as --iteration and --area
+      3. No sizing fields — leave blank
 
       After all created, post summary comment on parent story
-      via MCP listing all task IDs and titles.
-      Include unresolved anti-pattern flags as audit trail.
-
-      Confirm with task IDs and links.
+      listing all task IDs and titles as audit trail.
 
       Tasks: {{final_task_list}}
-      Parent: {{work_item_id}}
-      Iteration: {{target_iteration}}
+      Parent story: {{story_data}}
+      Parent ID: {{work_item_id}}
+      Workspace: {{selected_workspace}}
     output: "created_tasks"
 
-  # Phase 9: Reflection
+  # Step 11: Reflection
   - id: "reflect"
     type: "agent"
     prompt: |
       Store discovery for category "ado-task-planning":
       - Parent story ID, task count
       - Anti-pattern flags raised vs overridden
-      - Team patterns
+      - Technical work areas surfaced vs accepted
+      - Team patterns observed
 
       Created: {{created_tasks}}
     output: "reflection"

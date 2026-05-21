@@ -1,8 +1,9 @@
 ---
 name: ado-task-planning
 description: |
-  Story-to-task decomposition with AC mapping and sprint placement.
-version: 1.0.0
+  Decomposes an existing ADO User Story into actionable sprint tasks with
+  AC coverage, technical work area discussion, and parent field inheritance.
+version: 2.0.0
 type: skill
 auto_activate_keywords:
   - plan tasks
@@ -19,4 +20,4 @@ recipe: amplifier-bundle/recipes/ado-task-planning.yaml
 Canonical spec: `amplifier-bundle/skills/ado-task-planning/SKILL.md`
 Recipe: `amplifier-bundle/recipes/ado-task-planning.yaml`
 
-Read the canonical source for the full workflow, decomposition rules, and key behaviors.
+Read the canonical source for the full workflow, agents, and key behaviors.
