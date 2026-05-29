@@ -1,5 +1,5 @@
 ---
-name: change-request-doc
+name: CAB_change-request-doc
 description: |
   Generates a Change Request Summary document from ADO stories and their
   linked PRs. Story-level entry (not feature). Parent features fetched for
@@ -57,17 +57,17 @@ Board selection runs before the recipe so the recipe runner never needs TTY acce
 WORKSPACE=$(python3 .claude/scenarios/az-devops-tools/select_board.py)
 
 # Primary: provide story IDs directly
-amplihack recipe run amplifier-bundle/recipes/change-request-doc.yaml \
+amplihack recipe run amplifier-bundle/recipes/CAB_change-request-doc.yaml \
   -c selected_workspace="$WORKSPACE" \
   -c story_ids="12345,12346"
 
 # Alternative: provide feature ID to expand to its child stories
-amplihack recipe run amplifier-bundle/recipes/change-request-doc.yaml \
+amplihack recipe run amplifier-bundle/recipes/CAB_change-request-doc.yaml \
   -c selected_workspace="$WORKSPACE" \
   -c feature_id="99999"
 
 # Both: stories + feature expansion, deduplicated
-amplihack recipe run amplifier-bundle/recipes/change-request-doc.yaml \
+amplihack recipe run amplifier-bundle/recipes/CAB_change-request-doc.yaml \
   -c selected_workspace="$WORKSPACE" \
   -c story_ids="12345" \
   -c feature_id="99999"
@@ -75,7 +75,7 @@ amplihack recipe run amplifier-bundle/recipes/change-request-doc.yaml \
 
 ## Recipe
 
-This skill is driven by the `change-request-doc` recipe (v4).
+This skill is driven by the `CAB_change-request-doc` recipe (v4).
 
 ## Workflow
 
@@ -116,7 +116,9 @@ This skill is driven by the `change-request-doc` recipe (v4).
 22. **Section-by-section review** — Walk through each section with user
 23. **Final approval** — Show complete document, user confirms (uses sentinel markers)
 24. **Output** — Generate clean final document (strips all confidence markers)
-25. **Reflection** — Store discovery
+25. **CRAM offer** — Ask if user wants CRAM risk assessment (data already collected)
+26. **CRAM execution** — If yes, invoke CRAM recipe with shared expert context (no re-fetch)
+27. **Reflection** — Store discovery
 
 ## Key Behaviors
 
@@ -135,7 +137,7 @@ This skill is driven by the `change-request-doc` recipe (v4).
 
 ## Cross-References
 
-- Planned: `cram-scoring` — CRAM matrix scoring (will reuse expert agents)
+- `CAB_cram-scoring` — CRAM matrix scoring (reuses expert agents, offered at end of CR workflow)
 - Planned: `proof-of-testing` — test documentation (will reuse expert agents)
 - See `ado-task-planning` for the task decomposition workflow pattern
 - See `ado-story-creation` for the story creation workflow pattern

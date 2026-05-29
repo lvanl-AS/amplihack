@@ -1,4 +1,4 @@
-name: "change-request-doc"
+name: "CAB_change-request-doc"
 description: "Generate a Change Request Summary document from ADO stories, parent features, and linked PRs"
 version: "4.0.0"
 author: "Amplihack Team"
@@ -36,6 +36,8 @@ context:
   reviewed_cr: ""
   user_approval: ""
   final_cr: ""
+  cram_offer: ""
+  cram_result: ""
   reflection: ""
 
 steps:
@@ -496,11 +498,47 @@ steps:
       Approval output: {{user_approval}}
     output: "final_cr"
 
-  # Step 22: Reflection
+  # Step 22: Offer CRAM scoring
+  - id: "offer-cram"
+    type: "agent"
+    condition: "final_cr != ''"
+    prompt: |
+      The Change Request document has been saved. Ask the user:
+
+      "Would you also like to generate a CRAM (Change Risk Assessment Matrix)
+      score for this change? This uses the Alaska Airlines CRAM template —
+      3 weighted categories (Business Impact, Execution Risk, Operational Risk)
+      with 11 subcriteria scored 1-3, producing a weighted total (6-18).
+
+      All the data from this CR session will be reused — no additional ADO
+      fetching needed. Just the scoring and your review."
+
+      If the user says yes (or any affirmative), respond with exactly:
+      ===CRAM_YES===
+
+      If the user says no (or any negative), respond with exactly:
+      ===CRAM_NO===
+    output: "cram_offer"
+
+  # Step 23: Run CRAM recipe with shared context
+  - id: "run-cram"
+    type: "recipe"
+    condition: "'===CRAM_YES===' in cram_offer"
+    recipe: "amplifier-bundle/recipes/CAB_cram-scoring.yaml"
+    context:
+      selected_workspace: "{{selected_workspace}}"
+      ado_context: "{{ado_context}}"
+      code_changes: "{{code_changes}}"
+      pipeline_data: "{{pipeline_data}}"
+      deployment_configs: "{{deployment_configs}}"
+      final_cr: "{{final_cr}}"
+    output: "cram_result"
+
+  # Step 24: Reflection
   - id: "reflect"
     type: "agent"
     prompt: |
-      Store discovery for category "change-request-doc":
+      Store discovery for category "CAB_change-request-doc":
       - Story count, PR count, repo count, feature count
       - How many fields were auto-filled vs drafted vs user-provided
       - Coherence flags raised and how they were resolved

@@ -1,5 +1,5 @@
 ---
-name: change-request-doc
+name: CAB_change-request-doc
 description: |
   Generates a Change Request Summary document from ADO stories and their
   linked PRs. Story-level entry (not feature). Parent features fetched for
@@ -57,17 +57,17 @@ Board selection runs before the recipe so the recipe runner never needs TTY acce
 WORKSPACE=$(python3 .claude/scenarios/az-devops-tools/select_board.py)
 
 # Primary: provide story IDs directly
-amplihack recipe run amplifier-bundle/recipes/change-request-doc.yaml \
+amplihack recipe run amplifier-bundle/recipes/CAB_change-request-doc.yaml \
   -c selected_workspace="$WORKSPACE" \
   -c story_ids="12345,12346"
 
 # Alternative: provide feature ID to expand to its child stories
-amplihack recipe run amplifier-bundle/recipes/change-request-doc.yaml \
+amplihack recipe run amplifier-bundle/recipes/CAB_change-request-doc.yaml \
   -c selected_workspace="$WORKSPACE" \
   -c feature_id="99999"
 
 # Both: stories + feature expansion, deduplicated
-amplihack recipe run amplifier-bundle/recipes/change-request-doc.yaml \
+amplihack recipe run amplifier-bundle/recipes/CAB_change-request-doc.yaml \
   -c selected_workspace="$WORKSPACE" \
   -c story_ids="12345" \
   -c feature_id="99999"

@@ -1,5 +1,5 @@
 ---
-name: change-request-doc
+name: CAB_change-request-doc
 description: |
   Generates a Change Request Summary from ADO stories and linked PRs.
   Story-level entry. Expert agents compress context for downstream drafters.
@@ -11,13 +11,13 @@ auto_activate_keywords:
   - release document
   - fill CR template
   - change request summary
-canonical_source: amplifier-bundle/skills/change-request-doc/SKILL.md
-recipe: amplifier-bundle/recipes/change-request-doc.yaml
+canonical_source: amplifier-bundle/skills/CAB_change-request-doc/SKILL.md
+recipe: amplifier-bundle/recipes/CAB_change-request-doc.yaml
 ---
 
 # Change Request Document
 
-Canonical spec: `amplifier-bundle/skills/change-request-doc/SKILL.md`
-Recipe: `amplifier-bundle/recipes/change-request-doc.yaml`
+Canonical spec: `amplifier-bundle/skills/CAB_change-request-doc/SKILL.md`
+Recipe: `amplifier-bundle/recipes/CAB_change-request-doc.yaml`
 
 Read the canonical source for the full workflow, agents, and key behaviors.
