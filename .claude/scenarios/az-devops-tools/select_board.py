@@ -11,6 +11,9 @@ Usage (from a skill/shell, capturing output):
 
 Options:
     --non-interactive    Print known boards as JSON and exit (for testing)
+    --select ALIAS       Select a known board by alias without interactive prompt.
+                         Supports exact match, case-insensitive match, and
+                         substring match (in that priority order).
 """
 
 import argparse
@@ -322,6 +325,52 @@ def _search_flow_plain(config: dict, known_aliases: set[str]) -> str:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _resolve_alias(config: dict, query: str) -> str | None:
+    """Resolve a query to a known board alias.
+
+    Tries in order: exact match, case-insensitive match, substring match.
+
+    Args:
+        config: Config dict with workspaces
+        query: Alias or partial alias to match
+
+    Returns:
+        Resolved alias string, or None if no match
+    """
+    boards = known_boards(config)
+    aliases = [b["alias"] for b in boards]
+
+    # Exact match
+    if query in aliases:
+        return query
+
+    # Case-insensitive match
+    query_lower = query.lower()
+    for alias in aliases:
+        if alias.lower() == query_lower:
+            return alias
+
+    # Substring match (case-insensitive) — also check project/team
+    matches = []
+    for b in boards:
+        alias = b["alias"]
+        searchable = f"{alias} {b.get('project', '')} {b.get('team', '')}".lower()
+        if query_lower in searchable:
+            matches.append(alias)
+
+    if len(matches) == 1:
+        return matches[0]
+
+    if len(matches) > 1:
+        print(
+            f"Ambiguous --select '{query}'. Matches: {', '.join(matches)}",
+            file=sys.stderr,
+        )
+        return None
+
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Select an Azure DevOps board")
     parser.add_argument(
@@ -329,12 +378,32 @@ def main() -> None:
         action="store_true",
         help="Print known boards as JSON and exit",
     )
+    parser.add_argument(
+        "--select",
+        metavar="ALIAS",
+        help="Select a known board by alias without interactive prompt. "
+             "Supports exact, case-insensitive, and substring matching.",
+    )
     args = parser.parse_args()
 
     config = load_config()
 
     if args.non_interactive:
         print(json.dumps(known_boards(config), indent=2))
+        return
+
+    if args.select:
+        alias = _resolve_alias(config, args.select)
+        if alias is None:
+            boards = known_boards(config)
+            available = [b["alias"] for b in boards]
+            print(
+                f"Error: No board matching '{args.select}'.\n"
+                f"Available: {', '.join(available)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(alias)
         return
 
     if HAS_QUESTIONARY:

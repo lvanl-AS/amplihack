@@ -1,0 +1,516 @@
+name: "change-request-doc"
+description: "Generate a Change Request Summary document from ADO stories, parent features, and linked PRs"
+version: "4.0.0"
+author: "Amplihack Team"
+tags: ["release", "change-request", "change-management"]
+
+context:
+  selected_workspace: ""
+  # Primary input: story IDs (comma-separated)
+  story_ids: ""
+  # Optional: feature ID to expand into story IDs
+  feature_id: ""
+  # auth_status is written by step 1 but not read downstream;
+  # retained because the recipe runner requires output targets to be declared.
+  auth_status: ""
+  expanded_story_ids: ""
+  all_story_ids: ""
+  stories_data: ""
+  feature_ids: ""
+  features_data: ""
+  linked_prs: ""
+  checkpoint_result: ""
+  additional_pr_ids: ""
+  additional_prs: ""
+  repo_names: ""
+  deployment_configs: ""
+  pipeline_data: ""
+  cr_template: ""
+  ado_context: ""
+  code_changes: ""
+  draft_auto_sections: ""
+  draft_rollback: ""
+  draft_alerting: ""
+  coherence_result: ""
+  combined_draft: ""
+  reviewed_cr: ""
+  user_approval: ""
+  final_cr: ""
+  reflection: ""
+
+steps:
+  # ============================================================
+  # Phase 1a: Story & Feature Fetch
+  # Get all stories, find parent features, fetch linked PRs.
+  # Entry: story_ids (required) or feature_id (optional convenience).
+  # ============================================================
+
+  # Step 1: Auth check
+  - id: "auth-check"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/auth_check.py \
+        --workspace "{{selected_workspace}}" --quiet
+    output: "auth_status"
+
+  # Step 2: If feature_id provided, expand to child story IDs
+  - id: "expand-feature"
+    type: "bash"
+    condition: "feature_id != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_child_ids.py \
+        --parent-id {{feature_id}} \
+        --workspace "{{selected_workspace}}"
+    output: "expanded_story_ids"
+
+  # Step 3: Combine story_ids + expanded_story_ids, deduplicate
+  - id: "combine-story-ids"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/combine_ids.py <<'IDS_EOF'
+      {{story_ids}}
+      {{expanded_story_ids}}
+      IDS_EOF
+    output: "all_story_ids"
+
+  # Step 4: Fetch all stories with relations
+  - id: "fetch-stories"
+    type: "bash"
+    condition: "all_story_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_child_stories.py \
+        --ids "{{all_story_ids}}" \
+        --workspace "{{selected_workspace}}"
+    output: "stories_data"
+
+  # Step 5: Extract parent feature IDs from story relations
+  - id: "extract-parent-features"
+    type: "bash"
+    condition: "stories_data != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_parent_ids.py <<'STORIES_EOF'
+      {{stories_data}}
+      STORIES_EOF
+    output: "feature_ids"
+
+  # Step 6: Fetch parent features for context
+  - id: "fetch-features"
+    type: "bash"
+    condition: "feature_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_child_stories.py \
+        --ids "{{feature_ids}}" \
+        --workspace "{{selected_workspace}}"
+    output: "features_data"
+
+  # Step 7: Fetch linked PRs for all stories
+  - id: "fetch-linked-prs"
+    type: "bash"
+    condition: "all_story_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_linked_prs.py \
+        --ids "{{all_story_ids}}" \
+        --workspace "{{selected_workspace}}" \
+        --detail
+    output: "linked_prs"
+
+  # ============================================================
+  # Phase 1b: PR Checkpoint
+  # Present what we found. Show stories + PRs for confirmation.
+  # Ask about additional PRs only.
+  # ============================================================
+
+  # Step 8: Present stories + PRs, ask for additional PRs
+  - id: "pr-checkpoint"
+    type: "agent"
+    prompt: |
+      You are reviewing the contents of a deployment before generating a
+      Change Request document.
+
+      Present a clean summary of what was found:
+
+      **Stories in this Change Request:**
+      For each story, show: ID, Title, State, Assigned To
+
+      **Parent Feature(s):**
+      For each feature, show: ID, Title
+
+      **PRs linked to stories:**
+      For each PR, show: PR ID, Title, Repository, Status, Linked Story ID
+
+      Stories: {{stories_data}}
+      Features: {{features_data}}
+      Linked PRs: {{linked_prs}}
+
+      Then ask:
+
+      "These PRs were found automatically from your ADO stories.
+      Are there any additional PRs that should be included in this
+      change request? These could be standalone PRs not linked to any
+      story, or PRs you want to make sure are captured.
+      Provide PR IDs (comma-separated), or say 'none'."
+
+      After the user responds, confirm the complete list.
+
+      Your FINAL message MUST end with exactly this block:
+      ===ADDITIONAL_DATA===
+      PRS: <comma-separated additional PR IDs, or leave blank>
+      ===END_ADDITIONAL_DATA===
+    output: "checkpoint_result"
+
+  # Step 9: Parse additional PR IDs from checkpoint
+  - id: "parse-additional-prs"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/parse_checkpoint.py --field prs <<'CHECKPOINT_EOF'
+      {{checkpoint_result}}
+      CHECKPOINT_EOF
+    output: "additional_pr_ids"
+
+  # Step 10: Fetch additional standalone PRs
+  - id: "fetch-additional-prs"
+    type: "bash"
+    condition: "additional_pr_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_prs_by_ids.py \
+        --ids "{{additional_pr_ids}}" \
+        --workspace "{{selected_workspace}}" \
+        --detail
+    output: "additional_prs"
+
+  # ============================================================
+  # Phase 2: Deployment Data Fetch
+  # Now we know all stories and PRs. Fetch deployment configs
+  # and pipeline data for every repo involved.
+  # ============================================================
+
+  # Step 11: Extract unique repo names from all PR sources
+  - id: "extract-repo-names"
+    type: "bash"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_repo_names.py <<'PR_DATA_EOF'
+      {{linked_prs}}
+      ===SOURCE===
+      {{additional_prs}}
+      PR_DATA_EOF
+    output: "repo_names"
+
+  # Step 12: Fetch deployment.yaml from each repo
+  - id: "fetch-deployment-configs"
+    type: "bash"
+    condition: "repo_names != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_repo_file.py \
+        --repository "{{repo_names}}" \
+        --path deployment.yaml \
+        --workspace "{{selected_workspace}}"
+    output: "deployment_configs"
+
+  # Step 13: Fetch pipeline definitions and recent runs
+  - id: "fetch-pipeline-data"
+    type: "bash"
+    condition: "repo_names != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_pipeline_runs.py \
+        --repositories "{{repo_names}}" \
+        --workspace "{{selected_workspace}}" \
+        --top 5
+    output: "pipeline_data"
+
+  # Step 14: Load CR template reference
+  - id: "load-cr-template"
+    type: "bash"
+    command: |
+      REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      cat "$REPO_ROOT/amplifier-bundle/skills/common/templates/reference_cr_template.md"
+    output: "cr_template"
+
+  # ============================================================
+  # Phase 3: Expert Understanding
+  # Two experts produce structured reference documents.
+  # Downstream agents use these instead of raw data.
+  # ============================================================
+
+  # Step 15a: ADO Context Expert — what and why
+  - id: "ado-context-expert"
+    type: "agent"
+    agent: "ado-context-expert"
+    prompt: |
+      Build a structured context reference document from the ADO data.
+      This will be the primary source of "what is this change and why"
+      for all downstream section drafters.
+
+      Organize your findings into General Findings, Testing & Verification,
+      then one section per CR template section. Here are the specific
+      questions each template section needs answered from ADO data:
+
+      **Section 1 — Deployment Details needs from you:**
+      - What is the Change Title? (from feature title)
+      - What is the Description of Change? (feature desc + story summaries)
+      - Are Target Environments mentioned in any story or AC?
+      - Is deployment timing or sequencing mentioned anywhere?
+
+      **Section 2 — Impacted Systems needs from you:**
+      - What systems or services are named in story descriptions or AC?
+      - What dependencies between systems are mentioned?
+      - Any upstream or downstream systems referenced?
+      - Any integration points (APIs, queues, databases) mentioned?
+
+      **Section 3 — Rollback Strategy needs from you:**
+      - What does success look like? (translate AC into deployment checks)
+      - What would indicate failure? (inverse of success criteria from AC)
+      - Are any irreversible changes mentioned in requirements?
+      - What validation steps are implied by AC?
+
+      **Section 4 — Alerting & Monitoring needs from you:**
+      - Any performance requirements or SLAs in AC? (response times, throughput)
+      - What specific metrics are implied by the requirements?
+      - Which systems need monitoring based on story scope?
+
+      **Section 5 — Documentation Links needs from you:**
+      - All story IDs and titles in scope
+      - All feature IDs and titles
+
+      Stories: {{stories_data}}
+      Features: {{features_data}}
+    output: "ado_context"
+
+  # Step 15b: Code Changes Expert — how and where
+  - id: "code-changes-expert"
+    type: "agent"
+    agent: "code-changes-expert"
+    prompt: |
+      Build a structured code changes reference document from all PR data.
+      Combine linked PRs and any additional standalone PRs into a single
+      analysis. This will be the primary source of "how is this change
+      implemented and where" for all downstream section drafters.
+
+      Organize your findings into General Findings, Testing & Verification,
+      then one section per CR template section. Here are the specific
+      questions each template section needs answered from PR data:
+
+      **Section 1 — Deployment Details needs from you:**
+      - Which repos are involved and how many PRs each?
+      - What target branches? (indicates environment)
+      - Any deployment or pipeline config files in the diffs?
+      - What changed per repo? (brief summary, not file list)
+
+      **Section 2 — Impacted Systems needs from you:**
+      - Which systems are directly modified? (from repo names)
+      - What subsystems within each repo? (API, DB, workers from file paths)
+      - Any systems mentioned in PR descriptions but not directly changed?
+
+      **Section 3 — Rollback Strategy needs from you:**
+      - Any migration or schema files detected in diffs?
+      - Any config changes that could be irreversible?
+      - Cross-repo dependencies that affect deployment/rollback ordering?
+      - Any data transformation scripts?
+
+      **Section 4 — Alerting & Monitoring needs from you:**
+      - Which repos had the largest changes? (need most monitoring)
+      - Any changes to monitoring or alerting config files?
+      - What types of changes suggest specific monitoring? (API changes → latency, DB changes → query perf)
+
+      **Section 5 — Documentation Links needs from you:**
+      - All PR IDs, titles, and URLs
+      - All repo names involved
+
+      Linked PRs: {{linked_prs}}
+      Additional PRs: {{additional_prs}}
+    output: "code_changes"
+
+  # ============================================================
+  # Phase 4: Section Drafting
+  # Section drafters use expert outputs, not raw data.
+  # Rollback drafter also gets raw deployment/pipeline data.
+  # ============================================================
+
+  # Step 16a: Draft Deployment Details, Impacted Systems, Documentation Links
+  - id: "draft-auto-sections"
+    type: "agent"
+    agent: "cr-auto-sections"
+    prompt: |
+      Draft Section 1 (Deployment Details), Section 2 (Impacted Systems),
+      and Section 5 (Documentation Links) of the Change Request Summary.
+
+      Use these expert references — do NOT request raw ADO or PR data:
+
+      ADO Context (what/why): {{ado_context}}
+      Code Changes (how/where): {{code_changes}}
+      CR Template: {{cr_template}}
+    output: "draft_auto_sections"
+
+  # Step 16b: Draft Rollback Strategy
+  - id: "draft-rollback"
+    type: "agent"
+    agent: "cr-rollback-drafter"
+    prompt: |
+      Draft Section 3 (Rollback Strategy) of the Change Request Summary.
+      Ground every statement in deployment configs, pipeline data, or
+      explicit questions to the user. Never infer or guess.
+
+      ADO Context (what/why): {{ado_context}}
+      Code Changes (how/where): {{code_changes}}
+      Deployment configs per repo: {{deployment_configs}}
+      Pipeline data per repo: {{pipeline_data}}
+      CR Template: {{cr_template}}
+    output: "draft_rollback"
+
+  # Step 16c: Draft Alerting & Monitoring
+  - id: "draft-alerting"
+    type: "agent"
+    agent: "cr-alerting-drafter"
+    prompt: |
+      Draft Section 4 (Alerting & Monitoring) of the Change Request Summary.
+
+      ADO Context (what/why): {{ado_context}}
+      Code Changes (how/where): {{code_changes}}
+      CR Template: {{cr_template}}
+    output: "draft_alerting"
+
+  # ============================================================
+  # Phase 5: Coherence Check
+  # ============================================================
+
+  # Step 17: Review all sections for contradictions
+  - id: "coherence-check"
+    type: "agent"
+    agent: "cr-coherence-checker"
+    prompt: |
+      Review all 5 drafted sections together for coherence and contradictions.
+
+      Check for:
+      1. Impacted Systems (sec 2) vs Rollback Strategy (sec 3) — does
+         rollback cover all impacted systems?
+      2. Deployment Details (sec 1) vs Rollback Strategy (sec 3) — does
+         the deployment method align with the rollback method?
+      3. Alerting (sec 4) vs Impacted Systems (sec 2) — do the metrics
+         cover all impacted systems?
+      4. Rollback time estimate vs change complexity — realistic?
+      5. Documentation Links (sec 5) — do work items and PR links
+         match what's referenced elsewhere?
+      6. Risk signals — check the expert General Findings for risk signals
+         (draft PRs, missing descriptions, active stories, scope gaps) and
+         verify they are addressed in the relevant drafted sections. Flag
+         any unaddressed risks.
+
+      Produce 0-5 specific flags. For each:
+      - What contradicts what (cite both sections)
+      - Suggested resolution
+
+      If no contradictions, say so.
+
+      Section 1+2+5 (auto): {{draft_auto_sections}}
+      Section 3 (rollback): {{draft_rollback}}
+      Section 4 (alerting): {{draft_alerting}}
+      Expert risk signals (for cross-check only):
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+    output: "coherence_result"
+
+  # ============================================================
+  # Phase 6: Combine + User Review
+  # ============================================================
+
+  # Step 18: Combine sections into single document
+  - id: "combine-sections"
+    type: "agent"
+    prompt: |
+      Combine the separately drafted sections into a single Change Request
+      Summary document. Apply any coherence check flags by noting them
+      inline as "[coherence note: ...]" for the user to resolve.
+
+      Order: Section 1, Section 2, Section 3, Section 4, Section 5.
+
+      Section 1+2+5 (auto): {{draft_auto_sections}}
+      Section 3 (rollback): {{draft_rollback}}
+      Section 4 (alerting): {{draft_alerting}}
+      Coherence flags: {{coherence_result}}
+    output: "combined_draft"
+
+  # Step 19: Section-by-section review with user
+  - id: "review-sections"
+    type: "agent"
+    prompt: |
+      Walk through the CR draft section by section with the user.
+
+      For each section:
+      1. Show the section content
+      2. Highlight [auto] fields — "Filled from your data, please verify"
+      3. Highlight [draft] / [known] / [user-confirmed] fields — "Please review"
+      4. Flag [inferred — flagged] fields — "Based on available data, needs confirmation"
+      5. Collect [needs input] / [unknown — asking] fields — ask user
+      6. If there are [coherence note] flags, present and ask user to resolve
+      7. Accept edits to any field
+
+      After all 5 sections are reviewed, show the complete updated document.
+
+      CR Draft: {{combined_draft}}
+    output: "reviewed_cr"
+
+  # Step 20: Final approval
+  - id: "approval-gate"
+    type: "agent"
+    prompt: |
+      Present the final Change Request Summary document.
+
+      "Here's your complete Change Request Summary. Ready to finalize?"
+
+      Show the full document cleanly formatted (no confidence markers —
+      those were for the review phase).
+
+      User confirms -> include the final document in your response.
+      User wants changes -> make the changes and include the updated document.
+
+      Your FINAL message MUST end with exactly one of these sentinels:
+      ===CR_APPROVED===
+      [the complete final document here]
+      ===END_CR===
+
+      Always include the sentinel block with the document, even if the
+      user requested changes (apply changes first, then output).
+
+      Document: {{reviewed_cr}}
+    output: "user_approval"
+
+  # Step 21: Output final document
+  - id: "output-cr"
+    type: "agent"
+    condition: "'===CR_APPROVED===' in user_approval"
+    prompt: |
+      Output the final Change Request Summary document.
+
+      Format as clean markdown suitable for:
+      1. Pasting into a SharePoint page
+      2. Attaching to a change management ticket
+      3. Sharing with the change review board
+
+      Remove all confidence markers ([auto], [draft], [needs input],
+      [known], [user-confirmed], [unknown — asking], [inferred — flagged],
+      [coherence note]).
+      Clean formatting, professional tone.
+
+      Extract the document from between ===CR_APPROVED=== and ===END_CR===
+      markers in the approval output below. Use that as the source document.
+
+      Approval output: {{user_approval}}
+    output: "final_cr"
+
+  # Step 22: Reflection
+  - id: "reflect"
+    type: "agent"
+    prompt: |
+      Store discovery for category "change-request-doc":
+      - Story count, PR count, repo count, feature count
+      - How many fields were auto-filled vs drafted vs user-provided
+      - Coherence flags raised and how they were resolved
+      - Deployment configs found vs missing
+      - Pipeline data availability
+      - Whether user provided additional PRs beyond auto-discovered ones
+      - Patterns observed (e.g., "PRs not linked in ADO", "no deployment.yaml in repo-X")
+
+      Final document: {{final_cr}}
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+      Coherence result: {{coherence_result}}
+    output: "reflection"

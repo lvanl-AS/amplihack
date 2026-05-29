@@ -43,8 +43,25 @@ class CommandResult:
     success: bool
 
     @property
+    def is_json(self) -> bool:
+        """Check if stdout looks like JSON (starts with { or [).
+
+        Useful for detecting non-JSON responses (e.g., HTML login pages
+        returned by az rest when auth tokens expire).
+        """
+        if not self.stdout:
+            return False
+        stripped = self.stdout.lstrip()
+        return stripped[:1] in ("{", "[")
+
+    @property
     def json_output(self) -> dict[str, Any] | None:
-        """Parse stdout as JSON if possible."""
+        """Parse stdout as JSON if possible.
+
+        Returns None if stdout is empty or not valid JSON. Use is_json
+        to pre-check before parsing if you want to distinguish between
+        "no output" and "non-JSON output" (e.g., HTML error pages).
+        """
         if not self.stdout:
             return None
         try:
@@ -92,12 +109,36 @@ class AzCliWrapper:
                 timeout=timeout,
             )
 
-            return CommandResult(
+            cmd_result = CommandResult(
                 returncode=result.returncode,
                 stdout=result.stdout.strip() if result.stdout else "",
                 stderr=result.stderr.strip() if result.stderr else "",
                 success=result.returncode == 0,
             )
+
+            # Warn if JSON was expected but response is not JSON
+            # (common with expired auth tokens returning HTML login pages)
+            if (
+                cmd_result.success
+                and "--output" in command
+                and "json" in command
+                and cmd_result.stdout
+                and not cmd_result.is_json
+            ):
+                print(
+                    "Warning: Expected JSON response but got non-JSON output "
+                    "(possible auth issue or HTML error page). "
+                    f"First 100 chars: {cmd_result.stdout[:100]}",
+                    file=sys.stderr,
+                )
+                cmd_result = CommandResult(
+                    returncode=cmd_result.returncode,
+                    stdout=cmd_result.stdout,
+                    stderr=cmd_result.stderr,
+                    success=False,  # Mark as failed so callers don't try to parse
+                )
+
+            return cmd_result
 
         except FileNotFoundError:
             raise FileNotFoundError(
