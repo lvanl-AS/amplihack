@@ -1,0 +1,392 @@
+name: "CAB_cram-scoring"
+description: "Generate a CRAM risk assessment from ADO stories and linked PRs. Skips data fetch phases when expert context is pre-provided."
+version: "1.0.0"
+author: "Amplihack Team"
+tags: ["release", "risk-assessment", "change-management", "cram"]
+
+context:
+  selected_workspace: ""
+  # Primary input: story IDs (comma-separated)
+  story_ids: ""
+  # Optional: feature ID to expand into story IDs
+  feature_id: ""
+  # Pre-computed context (from CR workflow). If both ado_context and
+  # code_changes are non-empty, Phases 1-3 are skipped entirely.
+  ado_context: ""
+  code_changes: ""
+  pipeline_data: ""
+  deployment_configs: ""
+  final_cr: ""
+  # Internal state
+  auth_status: ""
+  expanded_story_ids: ""
+  all_story_ids: ""
+  stories_data: ""
+  feature_ids: ""
+  features_data: ""
+  linked_prs: ""
+  checkpoint_result: ""
+  additional_pr_ids: ""
+  additional_prs: ""
+  repo_names: ""
+  cram_template: ""
+  cram_scores: ""
+  reviewed_cram: ""
+  user_approval: ""
+  final_cram: ""
+  reflection: ""
+
+steps:
+  # ============================================================
+  # Phase 1a: Story & Feature Fetch
+  # SKIPPED when ado_context and code_changes are already provided.
+  # ============================================================
+
+  # Step 1: Auth check
+  - id: "auth-check"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/auth_check.py \
+        --workspace "{{selected_workspace}}" --quiet
+    output: "auth_status"
+
+  # Step 2: If feature_id provided, expand to child story IDs
+  - id: "expand-feature"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and feature_id != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_child_ids.py \
+        --parent-id {{feature_id}} \
+        --workspace "{{selected_workspace}}"
+    output: "expanded_story_ids"
+
+  # Step 3: Combine story_ids + expanded_story_ids, deduplicate
+  - id: "combine-story-ids"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/combine_ids.py <<'IDS_EOF'
+      {{story_ids}}
+      {{expanded_story_ids}}
+      IDS_EOF
+    output: "all_story_ids"
+
+  # Step 4: Fetch all stories with relations
+  - id: "fetch-stories"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and all_story_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_child_stories.py \
+        --ids "{{all_story_ids}}" \
+        --workspace "{{selected_workspace}}"
+    output: "stories_data"
+
+  # Step 5: Extract parent feature IDs from story relations
+  - id: "extract-parent-features"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and stories_data != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_parent_ids.py <<'STORIES_EOF'
+      {{stories_data}}
+      STORIES_EOF
+    output: "feature_ids"
+
+  # Step 6: Fetch parent features for context
+  - id: "fetch-features"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and feature_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_child_stories.py \
+        --ids "{{feature_ids}}" \
+        --workspace "{{selected_workspace}}"
+    output: "features_data"
+
+  # Step 7: Fetch linked PRs for all stories
+  - id: "fetch-linked-prs"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and all_story_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_linked_prs.py \
+        --ids "{{all_story_ids}}" \
+        --workspace "{{selected_workspace}}" \
+        --detail
+    output: "linked_prs"
+
+  # ============================================================
+  # Phase 1b: PR Checkpoint
+  # SKIPPED when expert context is pre-provided.
+  # ============================================================
+
+  # Step 8: Present stories + PRs, ask for additional PRs
+  - id: "pr-checkpoint"
+    type: "agent"
+    condition: "ado_context == '' or code_changes == ''"
+    prompt: |
+      You are reviewing the contents of a deployment before generating a
+      CRAM risk assessment.
+
+      Present a clean summary of what was found:
+
+      **Stories in this assessment:**
+      For each story, show: ID, Title, State, Assigned To
+
+      **Parent Feature(s):**
+      For each feature, show: ID, Title
+
+      **PRs linked to stories:**
+      For each PR, show: PR ID, Title, Repository, Status, Linked Story ID
+
+      Stories: {{stories_data}}
+      Features: {{features_data}}
+      Linked PRs: {{linked_prs}}
+
+      Then ask:
+
+      "These PRs were found automatically from your ADO stories.
+      Are there any additional PRs that should be included in this
+      risk assessment? Provide PR IDs (comma-separated), or say 'none'."
+
+      After the user responds, confirm the complete list.
+
+      Your FINAL message MUST end with exactly this block:
+      ===ADDITIONAL_DATA===
+      PRS: <comma-separated additional PR IDs, or leave blank>
+      ===END_ADDITIONAL_DATA===
+    output: "checkpoint_result"
+
+  # Step 9: Parse additional PR IDs from checkpoint
+  - id: "parse-additional-prs"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/parse_checkpoint.py --field prs <<'CHECKPOINT_EOF'
+      {{checkpoint_result}}
+      CHECKPOINT_EOF
+    output: "additional_pr_ids"
+
+  # Step 10: Fetch additional standalone PRs
+  - id: "fetch-additional-prs"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and additional_pr_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_prs_by_ids.py \
+        --ids "{{additional_pr_ids}}" \
+        --workspace "{{selected_workspace}}" \
+        --detail
+    output: "additional_prs"
+
+  # ============================================================
+  # Phase 2: Deployment Data Fetch
+  # SKIPPED when expert context is pre-provided (pipeline_data
+  # and deployment_configs passed in directly).
+  # ============================================================
+
+  # Step 11: Extract unique repo names from all PR sources
+  - id: "extract-repo-names"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_repo_names.py <<'PR_DATA_EOF'
+      {{linked_prs}}
+      ===SOURCE===
+      {{additional_prs}}
+      PR_DATA_EOF
+    output: "repo_names"
+
+  # Step 12: Fetch deployment.yaml from each repo
+  - id: "fetch-deployment-configs"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and repo_names != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_repo_file.py \
+        --repository "{{repo_names}}" \
+        --path deployment.yaml \
+        --workspace "{{selected_workspace}}"
+    output: "deployment_configs"
+
+  # Step 13: Fetch pipeline definitions and recent runs
+  - id: "fetch-pipeline-data"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and repo_names != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_pipeline_runs.py \
+        --repositories "{{repo_names}}" \
+        --workspace "{{selected_workspace}}" \
+        --top 5
+    output: "pipeline_data"
+
+  # ============================================================
+  # Phase 3: Expert Understanding
+  # SKIPPED when ado_context and code_changes are pre-provided.
+  # ============================================================
+
+  # Step 14a: ADO Context Expert -- what and why
+  - id: "ado-context-expert"
+    type: "agent"
+    agent: "ado-context-expert"
+    condition: "ado_context == '' or code_changes == ''"
+    prompt: |
+      Build a structured context reference document from the ADO data.
+      This will be used for CRAM risk scoring across 3 weighted categories:
+      Business Impact, Execution Risk, and Operational Risk.
+
+      Focus on extracting:
+      - System tier classification and criticality (Business Impact: System Criticality)
+      - Guest-facing vs internal impact, outage potential (Business Impact: Customer Impact)
+      - Compliance or regulatory requirements (Business Impact: Regulatory Compliance)
+      - Acceptance criteria completeness and story states (Execution Risk: Testing Coverage)
+      - Scope, team count, integration complexity (Execution Risk: Change Complexity)
+      - Vendor or third-party dependencies (Operational Risk: Vendor Dependency)
+      - Deployment readiness signals (Operational Risk: Operational Readiness)
+
+      Stories: {{stories_data}}
+      Features: {{features_data}}
+    output: "ado_context"
+
+  # Step 14b: Code Changes Expert -- how and where
+  - id: "code-changes-expert"
+    type: "agent"
+    agent: "code-changes-expert"
+    condition: "ado_context == '' or code_changes == ''"
+    prompt: |
+      Build a structured code changes reference document from all PR data.
+      This will be used for CRAM risk scoring across 3 weighted categories:
+      Business Impact, Execution Risk, and Operational Risk.
+
+      Focus on extracting:
+      - Systems and services directly modified, tier indicators (Business Impact: System Criticality)
+      - Customer-facing surface changes (Business Impact: Customer Impact)
+      - Repo count, team count, integration depth, system count (Execution Risk: Change Complexity)
+      - Test files in diffs, PR review status, revert history (Execution Risk: Testing Coverage)
+      - Migration files, rollback time signals, feature flags, pipeline configs (Execution Risk: Rollback Feasibility)
+      - Security-sensitive file changes, quality gate configs (Operational Risk: Secure Coding)
+      - RR testing evidence, recovery automation (Operational Risk: Resilience & Recovery)
+      - Vendor/third-party integration changes (Operational Risk: Vendor Dependency)
+
+      Linked PRs: {{linked_prs}}
+      Additional PRs: {{additional_prs}}
+    output: "code_changes"
+
+  # ============================================================
+  # Phase 4: CRAM Scoring
+  # Always runs. Uses expert context + optional deployment data.
+  # ============================================================
+
+  # Step 15: Load CRAM template (always needed)
+  - id: "load-cram-template"
+    type: "bash"
+    command: |
+      REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      cat "$REPO_ROOT/amplifier-bundle/skills/common/templates/reference_cram_template.md"
+    output: "cram_template"
+
+  # Step 16: CRAM Scorer -- score all 4 dimensions
+  - id: "cram-scorer"
+    type: "agent"
+    agent: "cram-scorer"
+    prompt: |
+      Score this change across all 3 CRAM categories (Business Impact,
+      Execution Risk, Operational Risk) and their 11 subcriteria using the
+      Alaska Airlines CRAM scoring rubric and expert reference documents.
+
+      For each subcriterion (1-3 scale):
+      1. Gather evidence from the expert outputs
+      2. Match to the rubric criteria for the best-fit score level
+      3. Cite specific data points (repos, PR numbers, story IDs, teams, line counts)
+      4. Note any data gaps and score conservatively where evidence is insufficient
+
+      Then calculate weighted scores:
+      - Business Impact = highest subcriterion × 3
+      - Execution Risk = average of subcriteria × 2
+      - Operational Risk = average of subcriteria × 1
+      - Total (6-18): Low (6-10), Medium (11-15), High (16-18)
+
+      CRAM Scoring Rubric: {{cram_template}}
+
+      ADO Context (what/why): {{ado_context}}
+      Code Changes (how/where): {{code_changes}}
+      Pipeline Data (optional): {{pipeline_data}}
+      Deployment Configs (optional): {{deployment_configs}}
+      Final CR (optional, for cross-reference): {{final_cr}}
+
+      Produce the full CRAM output following the template format exactly:
+      subcriteria scores table, weighted scores calculation, risk level,
+      detailed justification per category, data gaps, and mitigations.
+    output: "cram_scores"
+
+  # ============================================================
+  # Phase 5: User Review
+  # ============================================================
+
+  # Step 17: Walk through scores with user
+  - id: "review-scores"
+    type: "agent"
+    prompt: |
+      Present the CRAM risk assessment to the user for review.
+
+      Walk through each of the 3 categories:
+      1. Show the subcriteria scores and justifications
+      2. Show the weighted calculation
+      3. Ask if the user agrees or wants to adjust any scores
+
+      Common adjustments:
+      - User knows the system tier classification
+      - User knows about mitigations not visible in the data (e.g., "we have
+        a feature flag" or "we tested this in staging for 2 weeks")
+      - User can specify the change window and freeze status
+      - User knows RR testing status and recovery time evidence
+      - User knows the SonarQube quality gate status
+      - Pipeline data was missing, user can provide rollback time estimates
+
+      After all 3 categories are reviewed, show the updated total weighted
+      score and risk level.
+
+      CRAM Assessment: {{cram_scores}}
+
+      Your FINAL message MUST end with exactly one of these sentinels:
+      ===CRAM_APPROVED===
+      [the complete final CRAM document here]
+      ===END_CRAM===
+    output: "reviewed_cram"
+
+  # Step 18: Output final document
+  - id: "output-cram"
+    type: "agent"
+    condition: "'===CRAM_APPROVED===' in reviewed_cram"
+    prompt: |
+      Output the final CRAM risk assessment document.
+
+      Format as clean markdown suitable for:
+      1. Attaching to a change management ticket
+      2. Presenting to a change advisory board
+      3. Including alongside a Change Request Summary
+
+      Extract the document from between ===CRAM_APPROVED=== and ===END_CRAM===
+      markers in the review output below. Use that as the source document.
+
+      Review output: {{reviewed_cram}}
+    output: "final_cram"
+
+  # ============================================================
+  # Phase 6: Reflection
+  # ============================================================
+
+  # Step 19: Store discovery
+  - id: "reflect"
+    type: "agent"
+    prompt: |
+      Store discovery for category "CAB_cram-scoring":
+      - Overall risk score and level
+      - Which dimension scored highest risk and why
+      - Data gaps that forced conservative scoring
+      - Whether context was pre-provided (from CR workflow) or fetched fresh
+      - User adjustments made during review (signals where data doesn't
+        capture the full picture)
+      - Patterns observed (e.g., "repos without tests score low confidence",
+        "multi-repo changes always elevate complexity")
+
+      Final CRAM: {{final_cram}}
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+    output: "reflection"
