@@ -81,10 +81,19 @@ For each repo:
 
 ## For Section 2: Impacted Systems
 
+### Ground Stop / Day-of-Travel System Check
+**CRITICAL**: Flag if ANY modified repo/service is or interacts with: **Account, BTS, ABD, CSA Mobile**. These are Ground Stop / Day-of-Travel applications — automatic HIGH risk per Risk Decision Tree, even for small changes. Standard Changes cannot use the GUID process for these systems.
+
+### Shared Service / Multi-Consumer API Check
+Flag any repo/service that is consumed by multiple applications or teams. Check PR descriptions and repo names for signals of shared/platform services. Per the Risk Decision Tree FAQ, multi-consumer APIs = shared service = HIGH risk.
+
+### Feature Flag Changes
+Per AAG Q&A: Feature flag changes (e.g., LaunchDarkly, config flags, feature toggles) ARE changes requiring CRs. If detected in diffs, flag them explicitly as they still need change management.
+
 ### Primary Systems (directly modified)
-| System/Service | Evidence | Confidence |
-|---------------|----------|------------|
-| [repo-name] | PRs #[id], #[id] modify this repo | [known] |
+| System/Service | Evidence | Confidence | Ground Stop? | Shared Service? |
+|---------------|----------|------------|-------------|----------------|
+| [repo-name] | PRs #[id], #[id] modify this repo | [known] | [yes/no] | [yes/no/unknown] |
 
 ### Subsystems Within Repos
 [Derived from file paths — e.g., "/api/" = API layer, "/migrations/" = database, "/workers/" = background processing]
@@ -114,6 +123,8 @@ If none found: "No migration or schema files detected in diffs."
 ### Irreversible Change Signals
 [Migration files, data transformation scripts, published API contract changes. For each: what it is and which PR introduced it.]
 
+**Fail-forward requirement**: When irreversible changes are detected, the CR MUST document: why rollback isn't possible, how impact will be detected, how the system will be stabilized/fixed forward, and stop/go decision points.
+
 ### Deployment Ordering Signals
 [Cross-repo dependencies that imply deployment order — e.g., "PR #X in repo-a adds an API endpoint that PR #Y in repo-b consumes → repo-a must deploy first"]
 
@@ -140,6 +151,31 @@ If none found: "No migration or schema files detected in diffs."
 
 ### Repositories
 [Unique repo names involved in this change]
+
+## For Cherwell Classify Fields
+
+### What Are You Changing?
+[Infer from file types and repo names: Application Code / Server / Database / Network / etc.]
+
+### Cherwell Risk Questionnaire Signals
+Data points that help answer Cherwell Risk Assessment Questionnaire questions:
+- **Complexity signal**: [repo count, team count, integration depth -> Simple/Moderate/Complex/Very Complex]
+- **Automation signal**: [pipeline-deployed? -> Yes/No for "Using Automation Tools"]
+- **Back-out duration signal**: [estimated rollback time from pipeline data, in minutes]
+- **Outage signal**: [any deployment configs suggesting outage needed?]
+- **Success count signal**: [pipeline run history — how many successful runs against main?]
+- **Test evidence signal**: [test files in diffs? test descriptions in PRs?]
+
+## For Risk Decision Tree Classification
+
+### Blast Radius from Code Perspective
+- Number of systems directly modified: [N]
+- Potential user impact if any repo fails: [all users / some users / limited]
+- Evidence: [which PRs/repos suggest broad vs narrow impact]
+
+### Mirror Testing Signal
+- Are there staging/QA environment indicators in pipeline configs? [yes/no]
+- Evidence: [deployment stages, environment targets from deployment.yaml]
 ```
 
 ## Behaviors

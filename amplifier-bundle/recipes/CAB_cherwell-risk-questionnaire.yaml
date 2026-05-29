@@ -1,0 +1,392 @@
+name: "CAB_cherwell-risk-questionnaire"
+description: "Pre-fill the 12-question Cherwell Risk Assessment Questionnaire from ADO stories, linked PRs, pipeline data, and deployment configs. Skips data fetch phases when expert context is pre-provided."
+version: "1.0.0"
+author: "Amplihack Team"
+tags: ["release", "risk-assessment", "change-management", "cherwell", "questionnaire"]
+
+context:
+  selected_workspace: ""
+  # Primary input: story IDs (comma-separated)
+  story_ids: ""
+  # Optional: feature ID to expand into story IDs
+  feature_id: ""
+  # Pre-computed context (from CR workflow). If both ado_context and
+  # code_changes are non-empty, Phases 1-3 are skipped entirely.
+  ado_context: ""
+  code_changes: ""
+  pipeline_data: ""
+  deployment_configs: ""
+  # Pre-computed risk classification (from CR workflow or standalone step)
+  risk_classification: ""
+  # Optional: reviewed CR document for back-out plan evidence
+  reviewed_cr: ""
+  # Internal state
+  auth_status: ""
+  expanded_story_ids: ""
+  all_story_ids: ""
+  stories_data: ""
+  feature_ids: ""
+  features_data: ""
+  linked_prs: ""
+  checkpoint_result: ""
+  additional_pr_ids: ""
+  additional_prs: ""
+  repo_names: ""
+  cherwell_questionnaire: ""
+  reflection: ""
+
+steps:
+  # ============================================================
+  # Phase 1a: Story & Feature Fetch
+  # SKIPPED when ado_context and code_changes are already provided.
+  # ============================================================
+
+  # Step 1: Auth check
+  - id: "auth-check"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/auth_check.py \
+        --workspace "{{selected_workspace}}" --quiet
+    output: "auth_status"
+
+  # Step 2: If feature_id provided, expand to child story IDs
+  - id: "expand-feature"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and feature_id != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_child_ids.py \
+        --parent-id {{feature_id}} \
+        --workspace "{{selected_workspace}}"
+    output: "expanded_story_ids"
+
+  # Step 3: Combine story_ids + expanded_story_ids, deduplicate
+  - id: "combine-story-ids"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/combine_ids.py <<'IDS_EOF'
+      {{story_ids}}
+      {{expanded_story_ids}}
+      IDS_EOF
+    output: "all_story_ids"
+
+  # Step 4: Fetch all stories with relations
+  - id: "fetch-stories"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and all_story_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_child_stories.py \
+        --ids "{{all_story_ids}}" \
+        --workspace "{{selected_workspace}}"
+    output: "stories_data"
+
+  # Step 5: Extract parent feature IDs from story relations
+  - id: "extract-parent-features"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and stories_data != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_parent_ids.py <<'STORIES_EOF'
+      {{stories_data}}
+      STORIES_EOF
+    output: "feature_ids"
+
+  # Step 6: Fetch parent features for context
+  - id: "fetch-features"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and feature_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_child_stories.py \
+        --ids "{{feature_ids}}" \
+        --workspace "{{selected_workspace}}"
+    output: "features_data"
+
+  # Step 7: Fetch linked PRs for all stories
+  - id: "fetch-linked-prs"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and all_story_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_linked_prs.py \
+        --ids "{{all_story_ids}}" \
+        --workspace "{{selected_workspace}}" \
+        --detail
+    output: "linked_prs"
+
+  # ============================================================
+  # Phase 1b: PR Checkpoint
+  # SKIPPED when expert context is pre-provided.
+  # ============================================================
+
+  # Step 8: Present stories + PRs, ask for additional PRs
+  - id: "pr-checkpoint"
+    type: "agent"
+    condition: "ado_context == '' or code_changes == ''"
+    prompt: |
+      You are reviewing the contents of a deployment before generating a
+      Cherwell Risk Assessment Questionnaire.
+
+      Present a clean summary of what was found:
+
+      **Stories in this assessment:**
+      For each story, show: ID, Title, State, Assigned To
+
+      **Parent Feature(s):**
+      For each feature, show: ID, Title
+
+      **PRs linked to stories:**
+      For each PR, show: PR ID, Title, Repository, Status, Linked Story ID
+
+      Stories: {{stories_data}}
+      Features: {{features_data}}
+      Linked PRs: {{linked_prs}}
+
+      Then ask:
+
+      "These PRs were found automatically from your ADO stories.
+      Are there any additional PRs that should be included in this
+      risk assessment? Provide PR IDs (comma-separated), or say 'none'."
+
+      After the user responds, confirm the complete list.
+
+      Your FINAL message MUST end with exactly this block:
+      ===ADDITIONAL_DATA===
+      PRS: <comma-separated additional PR IDs, or leave blank>
+      ===END_ADDITIONAL_DATA===
+    output: "checkpoint_result"
+
+  # Step 9: Parse additional PR IDs from checkpoint
+  - id: "parse-additional-prs"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/parse_checkpoint.py --field prs <<'CHECKPOINT_EOF'
+      {{checkpoint_result}}
+      CHECKPOINT_EOF
+    output: "additional_pr_ids"
+
+  # Step 10: Fetch additional standalone PRs
+  - id: "fetch-additional-prs"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and additional_pr_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_prs_by_ids.py \
+        --ids "{{additional_pr_ids}}" \
+        --workspace "{{selected_workspace}}" \
+        --detail
+    output: "additional_prs"
+
+  # ============================================================
+  # Phase 2: Deployment Data Fetch
+  # SKIPPED when expert context is pre-provided (pipeline_data
+  # and deployment_configs passed in directly).
+  # ============================================================
+
+  # Step 11: Extract unique repo names from all PR sources
+  - id: "extract-repo-names"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_repo_names.py <<'PR_DATA_EOF'
+      {{linked_prs}}
+      ===SOURCE===
+      {{additional_prs}}
+      PR_DATA_EOF
+    output: "repo_names"
+
+  # Step 12: Fetch deployment configs
+  - id: "fetch-deployment-configs"
+    type: "bash"
+    condition: "repo_names != '' and (ado_context == '' or code_changes == '')"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_repo_file.py \
+        --repository "{{repo_names}}" \
+        --path deployment.yaml \
+        --workspace "{{selected_workspace}}"
+    output: "deployment_configs"
+
+  # Step 13: Fetch pipeline data
+  - id: "fetch-pipeline-data"
+    type: "bash"
+    condition: "repo_names != '' and (ado_context == '' or code_changes == '')"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_pipeline_runs.py \
+        --repositories "{{repo_names}}" \
+        --workspace "{{selected_workspace}}" \
+        --top 5
+    output: "pipeline_data"
+
+  # ============================================================
+  # Phase 3: Expert Understanding
+  # SKIPPED when ado_context and code_changes are pre-provided.
+  # ============================================================
+
+  # Step 14a: ADO Context Expert
+  - id: "ado-context-expert"
+    type: "agent"
+    condition: "ado_context == ''"
+    agent: "ado-context-expert"
+    prompt: |
+      Build a structured context reference document from the ADO data.
+      Focus on risk signals and Cherwell questionnaire data:
+      - Ground Stop / Day-of-Travel apps (Account, BTS, ABD, CSA Mobile)
+      - Shared services / multi-consumer APIs
+      - Blast radius (all users / some users / limited)
+      - Testing completeness and AC quality
+      - Guest flows / touchpoints
+      - Communication Plan signals from stories
+
+      Stories: {{stories_data}}
+      Features: {{features_data}}
+    output: "ado_context"
+
+  # Step 14b: Code Changes Expert
+  - id: "code-changes-expert"
+    type: "agent"
+    condition: "code_changes == ''"
+    agent: "code-changes-expert"
+    prompt: |
+      Build a structured code changes reference focusing on risk and
+      Cherwell questionnaire signals:
+      - Ground Stop / Day-of-Travel apps
+      - Shared services / multi-consumer APIs
+      - Complexity signal (repo count, team count, integration depth)
+      - Automation signal (pipeline-deployed?)
+      - Back-out duration signal (rollback time from pipeline data)
+      - Success count (successful pipeline runs against main)
+      - Test evidence (test files in diffs)
+      - Feature flag changes
+      - Mirror testing signals
+
+      Linked PRs: {{linked_prs}}
+      Additional PRs: {{additional_prs}}
+    output: "code_changes"
+
+  # ============================================================
+  # Phase 4: Risk Decision Tree Classification
+  # SKIPPED when risk_classification is pre-provided.
+  # ============================================================
+
+  # Step 15: Risk Decision Tree classification (if not pre-provided)
+  - id: "risk-decision-tree"
+    type: "agent"
+    condition: "risk_classification == ''"
+    prompt: |
+      Classify this change using the Alaska Airlines Risk Decision Tree v0.93.
+      This is a DETERMINISTIC algorithm — follow the tree exactly.
+
+      DECISION TREE (evaluate in order, stop at first match):
+
+      1. Ground Stop App? (Account, BTS, ABD, CSA Mobile) → HIGH
+      2. Shared Service? → HIGH
+      3. Blast radius All Users → HIGH, Some Users → MEDIUM
+      4. 100% mirror-tested → LOW, <100% → MEDIUM
+      5. Standard Change → LOW, Otherwise → MEDIUM
+
+      OUTPUT as:
+      ===RISK_CLASSIFICATION===
+      RISK_LEVEL: <LOW/MEDIUM/HIGH>
+      TREE_BRANCH: <which branch triggered>
+      GROUND_STOP: <true/false>
+      SHARED_SERVICE: <true/false>
+      BLAST_RADIUS: <all_users/some_users/limited/unknown>
+      MIRROR_TESTED: <yes/no/unknown>
+      ===END_RISK_CLASSIFICATION===
+
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+    output: "risk_classification"
+
+  # ============================================================
+  # Phase 5: Cherwell Risk Assessment Questionnaire
+  # Always runs — this is the core of this recipe.
+  # ============================================================
+
+  # Step 16: Cherwell Risk Assessment Questionnaire pre-fill
+  - id: "cherwell-questionnaire"
+    type: "agent"
+    prompt: |
+      Pre-fill answers to the 12 Cherwell Risk Assessment Questionnaire
+      questions using available data. Present each answer with evidence and
+      ask the user to confirm or adjust.
+
+      These questions are answered directly in the Cherwell form and drive the
+      system's risk calculation (Low/Medium/High). The Risk Decision Tree
+      classification provides the target risk level — answers should be
+      consistent with it.
+
+      QUESTIONS AND PRE-FILL LOGIC:
+
+      1. **How Complex Is This Change?**
+         From Code Changes → Cherwell Classify Fields → Complexity signal
+         Map: 1-2 repos = Simple, 3-4 = Moderate, 5+ = Complex/Very Complex
+
+      2. **Is This Change Using Automation Tools To Reduce Manual Steps?**
+         From pipeline data: pipeline-deployed = Yes, manual = No
+
+      3. **How Difficult Is It To Verify The Change Completed Successfully?**
+         From ADO Context → Testing: AC completeness and clarity
+         Map: Clear AC = Easy, Vague AC = Moderate, No AC = Difficult
+
+      4. **Does This Change Have a Back Out Plan?**
+         If rollback steps exist in reviewed_cr → Yes
+         If no reviewed_cr: check Code Changes for irreversible signals
+         If fail-forward only → No (but explain mitigation)
+
+      5. **How Long to Back Out of This Change?**
+         From pipeline run history or reviewed_cr rollback time estimate
+
+      6. **Will This Change Require an Outage?**
+         From deployment configs: outage window mentioned? Service restart?
+
+      7. **If the Change Fails, Is the System Recoverable Within the Outage Window?**
+         From rollback time estimate vs planned outage window
+
+      8. **Does This Change Fall Within the 10:30pm - 4:00am Maintenance Window? (Or During an Approved Exception Period)**
+         If deployment time known, check against window. Otherwise ask.
+
+      9. **How Many Times Has This Change Been Successful?**
+         From pipeline run history: count of successful runs against main
+
+      10. **Has This Change Been Tested?**
+          From Code Changes → Testing: test files in diffs
+
+      11. **Have You Documented and Archived Proof of Testing?**
+          Cannot auto-fill — ask user directly.
+
+      12. **List any remaining concerns regarding testing this change.**
+          From expert Testing gaps + coherence flags about testing
+
+      Present as a numbered list. For each question show:
+      - The question
+      - Pre-filled answer with evidence citation
+      - Confidence level (auto/draft/needs-input)
+      - "Confirm or adjust?"
+
+      Risk Decision Tree Classification: {{risk_classification}}
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+      Pipeline Data: {{pipeline_data}}
+      Reviewed CR (optional): {{reviewed_cr}}
+    output: "cherwell_questionnaire"
+
+  # ============================================================
+  # Phase 6: Reflection
+  # ============================================================
+
+  # Step 17: Reflection
+  - id: "reflect"
+    type: "agent"
+    prompt: |
+      Store discovery for category "CAB_cherwell-risk-questionnaire":
+      - How many of 12 questions auto-filled vs needing user input
+      - Risk Decision Tree classification and alignment with questionnaire answers
+      - Data gaps that affected answer confidence
+      - Whether context was pre-provided or fetched fresh
+      - User adjustments made (signals where auto-fill was wrong)
+      - Pipeline data availability (affects questions 2, 5, 9)
+
+      Cherwell Questionnaire: {{cherwell_questionnaire}}
+      Risk Classification: {{risk_classification}}
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+    output: "reflection"

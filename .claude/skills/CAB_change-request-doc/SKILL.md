@@ -3,7 +3,9 @@ name: CAB_change-request-doc
 description: |
   Generates a Change Request Summary from ADO stories and linked PRs.
   Story-level entry. Expert agents compress context for downstream drafters.
-version: 4.0.0
+  Includes Risk Decision Tree, Cherwell form mapping, Proof of Testing,
+  and .docx export. Document structure matches real CR examples.
+version: 6.0.0
 type: skill
 auto_activate_keywords:
   - change request

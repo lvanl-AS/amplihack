@@ -64,8 +64,7 @@ def get_work_item_details(
 
     if wrapper.org:
         cmd.extend(["--org", wrapper.org])
-    if wrapper.project:
-        cmd.extend(["--project", wrapper.project])
+    # Note: az boards work-item show does NOT accept --project
 
     if fields:
         cmd.extend(["--fields", ",".join(fields)])
@@ -97,8 +96,7 @@ def get_work_item_details(
                         "--output", "json"]
             if wrapper.org:
                 rel_cmd.extend(["--org", wrapper.org])
-            if wrapper.project:
-                rel_cmd.extend(["--project", wrapper.project])
+            # Note: az boards work-item show does NOT accept --project
             relations_result = wrapper.run(rel_cmd, timeout=30)
             if relations_result.success:
                 rel_data = json.loads(relations_result.stdout)

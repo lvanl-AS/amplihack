@@ -5,7 +5,7 @@ description: |
   Alaska Airlines CRAM template. 3 weighted categories, 11 subcriteria, 1-3
   scale, total 6-18. Reuses the same expert agents as the CR workflow. Can be
   invoked standalone or from the CR recipe with pre-computed expert context.
-version: 1.0.0
+version: 2.0.0
 type: skill
 auto_activate_keywords:
   - CRAM
@@ -50,10 +50,17 @@ Activate when the user:
 ## Execution
 
 ### Standalone (full data fetch)
-Board selection runs before the recipe so the recipe runner never needs TTY access.
+Board selection is driven by Claude (no TTY needed).
 
 ```bash
-WORKSPACE=$(python3 .claude/scenarios/az-devops-tools/select_board.py)
+# Step 1: Get known boards
+BOARDS=$(python3 .claude/scenarios/az-devops-tools/select_board.py --list)
+# Step 2: If one board → auto-select its alias as WORKSPACE
+#         If multiple → present list to user, ask which one
+#         If user wants a different board → --search "<term>", present results,
+#           then --save --org <org> --project <project> --team <team> to persist
+# Step 3: Resolve selection
+WORKSPACE=$(python3 .claude/scenarios/az-devops-tools/select_board.py --select "<alias>")
 
 # Primary: provide story IDs directly
 amplihack recipe run amplifier-bundle/recipes/CAB_cram-scoring.yaml \
@@ -114,24 +121,31 @@ This skill is driven by the `CAB_cram-scoring` recipe.
 18. **CRAM Scorer** -- Score all 4 dimensions using expert outputs, pipeline data, deployment configs, and optional final CR
 
 ### Phase 5: User Review
-19. **Present scores** -- Walk through each dimension score with user
-20. **Final approval** -- User confirms or adjusts scores
-21. **Output** -- Generate clean final CRAM document
+19. **Present scores** -- Walk through each category with scores and justifications
+20. **Data gap prompts** -- Proactively ask about Secure Coding (SonarQube), System Criticality (ORBIS tier), Resilience & Recovery (RR testing), Change Window — only for flagged gaps
+21. **User adjustments** -- User confirms or adjusts scores, recalculate totals
+22. **Parse approved scores** -- Extract final JSON from sentinel block
+23. **Generate CRAM Excel** -- Produce .xlsx with color-coded scores matching the official template
 
 ### Phase 6: Reflection
-22. **Reflection** -- Store discovery about scoring patterns
+24. **Reflection** -- Store discovery about scoring patterns
 
 ## Key Behaviors
 
 - **Context-aware entry** -- If `ado_context` and `code_changes` are non-empty, skip directly to Phase 4. This enables efficient chaining from the CR workflow.
 - **Same experts, different consumer** -- Reuses the same ADO Context Expert and Code Changes Expert as the CR workflow, but feeds their output to the CRAM Scorer instead of section drafters.
 - **Alaska Airlines CRAM template** -- 3 categories, 11 subcriteria, 1-3 scale, weighted scoring (6-18 total). Not a generic risk matrix.
-- **Weighted scoring** -- Business Impact uses highest subcriterion × 3. Execution Risk uses average × 2. Operational Risk uses average × 1.
+- **Weighted scoring** -- Business Impact uses highest subcriterion x 3. Execution Risk uses average x 2. Operational Risk uses average x 1.
+- **Risk Decision Tree integration** -- Scorer also runs the deterministic Risk Decision Tree v0.93 and includes the classification in output. Ground Stop apps (Account, BTS, ABD, CSA Mobile) = automatic score 3 for System Criticality. Shared services (multi-consumer APIs) = minimum score 2.
+- **Objective thresholds** -- Maintenance window: 10:30 PM - 4:00 AM. SonarQube Alaska Standard: 70% coverage. PCI changes: ALL vulnerabilities resolved. Soft freeze: Fri-Sun. These are not subjective — they are deterministic.
 - **Conservative on gaps** -- Missing data scores higher (more conservative). Every gap is flagged explicitly.
 - **CR cross-reference** -- When a final CR is provided, the scorer uses deployment window, rollback strategy, and monitoring sections to ground Operational Risk scores.
 - **Pipeline data grounds execution risk** -- Rollback time and RR estimates use actual pipeline run durations, not guesses.
 - **Never inflates risk** -- Equally dangerous to overstate as understate. Score what the data supports.
-- **Clean output** -- Final document follows the CRAM template format exactly.
+- **CRAM → approval routing** -- Score maps to approval requirements: Low (6-10) = Peer only, Medium (11-15) = Peer + CAB, High (16-18) = Peer + CAB + Director. Additional approvals during freeze periods.
+- **Cherwell alignment** -- CRAM score should align with Cherwell Risk Assessment Questionnaire result. If they disagree, the scorer flags the discrepancy.
+- **Only valid change types** -- Standard, Normal, Emergency. Informational is no longer valid.
+- **Excel output** -- Final output is an .xlsx workbook with color-coded scores (green/yellow/red) matching the official CRAM template. Users can tweak in Excel and export as needed.
 
 ## Cross-References
 

@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
-"""Interactive Azure DevOps board selector.
+"""Azure DevOps board selector — CLI-driven for Claude Code integration.
 
-Presents known boards with arrow navigation. Supports fuzzy search via
-Levenshtein distance for discovering new boards. Saves new boards to
-~/.azure-devops-tools.json. Prints the selected workspace alias to stdout.
+All interaction is driven through CLI flags so Claude can orchestrate the
+board selection conversationally. The Levenshtein fuzzy search, board
+discovery, and config persistence all work through these subcommands.
 
-Usage (from a skill/shell, capturing output):
-    WORKSPACE=$(python select_board.py)
-    amplihack recipe run ... -c selected_workspace="$WORKSPACE"
+Subcommands:
+    --list               List known (saved) boards as JSON
+    --select ALIAS       Resolve alias (exact/case-insensitive/substring) and print it
+    --search QUERY       Fuzzy search all discovered ADO boards, return JSON results
+    --search QUERY --refresh   Refresh board cache from ADO before searching
+    --save               Save a new board (requires --org, --project, --team)
 
-Options:
-    --non-interactive    Print known boards as JSON and exit (for testing)
-    --select ALIAS       Select a known board by alias without interactive prompt.
-                         Supports exact match, case-insensitive match, and
-                         substring match (in that priority order).
+Examples:
+    # List saved boards
+    python select_board.py --list
+
+    # Select a known board by partial name
+    python select_board.py --select "Account"
+
+    # Fuzzy search for a board (typos ok)
+    python select_board.py --search "personlization"
+
+    # Save a discovered board
+    python select_board.py --save --org https://dev.azure.com/itsals \\
+        --project E_Retain_Account --team "Account Personalization"
 """
 
 import argparse
@@ -372,26 +383,54 @@ def _resolve_alias(config: dict, query: str) -> str | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Select an Azure DevOps board")
+    parser = argparse.ArgumentParser(description="Azure DevOps board selector")
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="Print known (saved) boards as JSON",
+    )
+    # Keep --non-interactive as alias for --list (backward compat)
     parser.add_argument(
         "--non-interactive",
         action="store_true",
-        help="Print known boards as JSON and exit",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--select",
         metavar="ALIAS",
-        help="Select a known board by alias without interactive prompt. "
-             "Supports exact, case-insensitive, and substring matching.",
+        help="Resolve a known board by alias (exact/case-insensitive/substring). "
+             "Prints the alias to stdout.",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--search",
+        metavar="QUERY",
+        help="Fuzzy search all discovered ADO boards using Levenshtein distance. "
+             "Returns JSON array of top matches.",
+    )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Force refresh board cache from ADO (use with --search)",
+    )
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Save a new board to config (requires --org, --project, --team)",
+    )
+    parser.add_argument("--org", help="ADO org URL (for --save)")
+    parser.add_argument("--project", help="ADO project name (for --save)")
+    parser.add_argument("--team", help="ADO team name (for --save)")
+    parser.add_argument("--alias", help="Custom alias (for --save, optional)")
 
+    args = parser.parse_args()
     config = load_config()
 
-    if args.non_interactive:
+    # --list / --non-interactive
+    if args.list or args.non_interactive:
         print(json.dumps(known_boards(config), indent=2))
         return
 
+    # --select ALIAS
     if args.select:
         alias = _resolve_alias(config, args.select)
         if alias is None:
@@ -406,13 +445,37 @@ def main() -> None:
         print(alias)
         return
 
-    if HAS_QUESTIONARY:
-        alias = _run_questionary(config)
-    else:
-        alias = _run_plain(config)
+    # --search QUERY [--refresh]
+    if args.search:
+        all_boards = _get_all_boards(refresh=args.refresh)
+        known_aliases = {b["alias"] for b in known_boards(config)}
+        results = fuzzy_search(args.search, all_boards, known_aliases)
+        print(json.dumps(results, indent=2))
+        return
 
-    # Print alias to stdout so the caller can capture it
-    print(alias)
+    # --save --org ORG --project PROJECT --team TEAM [--alias ALIAS]
+    if args.save:
+        if not args.org or not args.project or not args.team:
+            print("Error: --save requires --org, --project, and --team", file=sys.stderr)
+            sys.exit(1)
+        board = {
+            "org": args.org,
+            "project": args.project,
+            "team": args.team,
+        }
+        if args.alias:
+            board["alias"] = args.alias
+        alias = save_board(config, board)
+        print(alias)
+        return
+
+    # No flags — print usage hint
+    boards = known_boards(config)
+    if boards:
+        print(json.dumps(boards, indent=2))
+    else:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

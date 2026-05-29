@@ -184,6 +184,9 @@ class AzCliWrapper:
 
         return self.run(command, timeout=timeout)
 
+    # Commands that do NOT accept --project (only --org)
+    _NO_PROJECT_COMMANDS = {"show", "update", "relation"}
+
     def boards_command(
         self,
         subcommand: list[str],
@@ -194,6 +197,9 @@ class AzCliWrapper:
 
         Use for work item operations: query, work-item show/create/update/delete,
         work-item relation, area, iteration.
+
+        Note: Some az boards subcommands (show, update, relation) do NOT
+        accept --project. This method auto-detects and omits it for those.
 
         Args:
             subcommand: Boards subcommand (e.g., ["work-item", "show", "--id", "123"])
@@ -207,7 +213,12 @@ class AzCliWrapper:
 
         if self.org:
             command.extend(["--org", self.org])
-        if self.project:
+
+        # Only add --project for commands that accept it
+        accepts_project = not any(
+            s in self._NO_PROJECT_COMMANDS for s in subcommand
+        )
+        if self.project and accepts_project:
             command.extend(["--project", self.project])
 
         if additional_args:

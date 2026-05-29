@@ -1,6 +1,6 @@
 name: "CAB_cram-scoring"
 description: "Generate a CRAM risk assessment from ADO stories and linked PRs. Skips data fetch phases when expert context is pre-provided."
-version: "1.0.0"
+version: "2.0.0"
 author: "Amplihack Team"
 tags: ["release", "risk-assessment", "change-management", "cram"]
 
@@ -17,6 +17,8 @@ context:
   pipeline_data: ""
   deployment_configs: ""
   final_cr: ""
+  # Pre-computed risk classification (from CR workflow or standalone step)
+  risk_classification: ""
   # Internal state
   auth_status: ""
   expanded_story_ids: ""
@@ -32,8 +34,10 @@ context:
   cram_template: ""
   cram_scores: ""
   reviewed_cram: ""
-  user_approval: ""
+  final_scores_json: ""
   final_cram: ""
+  persist_status: ""
+  cleanup_status: ""
   reflection: ""
 
 steps:
@@ -269,11 +273,102 @@ steps:
     output: "code_changes"
 
   # ============================================================
-  # Phase 4: CRAM Scoring
-  # Always runs. Uses expert context + optional deployment data.
+  # Phase 4: Risk Classification + CRAM Scoring
+  # Risk Decision Tree runs standalone only (skipped when pre-provided).
+  # CRAM scoring always runs.
   # ============================================================
 
-  # Step 15: Load CRAM template (always needed)
+  # Step 15: Risk Decision Tree classification (standalone only)
+  - id: "risk-decision-tree"
+    type: "agent"
+    condition: "risk_classification == ''"
+    prompt: |
+      Classify this change using the Alaska Airlines Risk Decision Tree v0.93.
+      This is a DETERMINISTIC algorithm — follow the tree exactly.
+
+      DECISION TREE (evaluate in order, stop at first match):
+
+      1. Does this change impact or interact with a Ground Stop App or
+         Customer Facing App? (Account, BTS, ABD, CSA Mobile)
+         Check ADO Context → Section 2 → Ground Stop flags
+         Check Code Changes → Section 2 → Ground Stop flags
+         → YES → **HIGH RISK**
+
+      2. Does the change affect any Shared Service?
+         (Network, middleware, API consumed by multiple apps/teams)
+         Check ADO Context → Section 2 → Shared Service flags
+         Check Code Changes → Section 2 → Shared Service / Multi-Consumer API flags
+         → YES → **HIGH RISK**
+
+      3. If the Change Fails, what is the blast radius?
+         Check ADO Context → Risk Decision Tree → Blast Radius Assessment
+         Check Code Changes → Risk Decision Tree → Blast Radius from Code Perspective
+         → All Users → **HIGH RISK**
+         → Some Users → **MEDIUM RISK**
+
+      4. Change is fully tested in a mirror of the live environment?
+         Check ADO Context → Risk Decision Tree → Testing Completeness Signal
+         Check Code Changes → Risk Decision Tree → Mirror Testing Signal
+         → Less than 100% Tested → **MEDIUM RISK**
+         → 100% Successfully Tested → **LOW RISK**
+
+      5. All Other Changes:
+         → If Standard Change → **LOW RISK**
+         → Otherwise → **MEDIUM RISK**
+
+      OUTPUT your classification as:
+      ===RISK_CLASSIFICATION===
+      RISK_LEVEL: <LOW/MEDIUM/HIGH>
+      TREE_BRANCH: <which branch was triggered>
+      GROUND_STOP: <true/false>
+      SHARED_SERVICE: <true/false>
+      BLAST_RADIUS: <all_users/some_users/limited/unknown>
+      MIRROR_TESTED: <yes/no/unknown>
+
+      APPROVAL_REQUIRED:
+      - Normal period: <approvals needed>
+      - Soft freeze (Fri-Sun): <additional approvals if applicable>
+      - Hard freeze: <additional approvals if applicable>
+
+      CHANGE_TYPE_GUIDANCE:
+      - <guidance based on classification>
+
+      DEADLINE_REMINDER:
+      - Friday 6:00 PM PST: CR submission deadline
+      - Thursday 2:00 PM PST: CAB meeting
+      ===END_RISK_CLASSIFICATION===
+
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+    output: "risk_classification"
+
+  # Persist expert context to working directory for context compaction resilience
+  - id: "persist-expert-context"
+    type: "bash"
+    condition: "ado_context != '' and code_changes != ''"
+    command: |
+      REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      WORKING_DIR="$REPO_ROOT/.claude/runtime/cab_working"
+      mkdir -p "$WORKING_DIR"
+      cat <<'PERSIST_ADO_EOF' > "$WORKING_DIR/ado_context.md"
+      {{ado_context}}
+      PERSIST_ADO_EOF
+      cat <<'PERSIST_CODE_EOF' > "$WORKING_DIR/code_changes.md"
+      {{code_changes}}
+      PERSIST_CODE_EOF
+      cat <<'PERSIST_RISK_EOF' > "$WORKING_DIR/risk_classification.md"
+      {{risk_classification}}
+      PERSIST_RISK_EOF
+      cat <<'PERSIST_PIPE_EOF' > "$WORKING_DIR/pipeline_data.md"
+      {{pipeline_data}}
+      PERSIST_PIPE_EOF
+      cat <<'PERSIST_DEPLOY_EOF' > "$WORKING_DIR/deployment_configs.md"
+      {{deployment_configs}}
+      PERSIST_DEPLOY_EOF
+      echo "Persisted expert context to $WORKING_DIR"
+    output: "persist_status"
+
+  # Step 16: Load CRAM template (always needed)
   - id: "load-cram-template"
     type: "bash"
     command: |
@@ -281,7 +376,7 @@ steps:
       cat "$REPO_ROOT/amplifier-bundle/skills/common/templates/reference_cram_template.md"
     output: "cram_template"
 
-  # Step 16: CRAM Scorer -- score all 4 dimensions
+  # Step 17: CRAM Scorer — produces structured JSON scores
   - id: "cram-scorer"
     type: "agent"
     agent: "cram-scorer"
@@ -290,89 +385,197 @@ steps:
       Execution Risk, Operational Risk) and their 11 subcriteria using the
       Alaska Airlines CRAM scoring rubric and expert reference documents.
 
-      For each subcriterion (1-3 scale):
-      1. Gather evidence from the expert outputs
-      2. Match to the rubric criteria for the best-fit score level
-      3. Cite specific data points (repos, PR numbers, story IDs, teams, line counts)
-      4. Note any data gaps and score conservatively where evidence is insufficient
+      SCORING PROCESS:
+      1. Start with the high-variance subcriteria (System Criticality,
+         Customer Impact, Secure Coding, Testing Coverage, Resilience &
+         Recovery) — these drive most of the score differentiation.
+      2. For low-variance subcriteria (Change Window, Vendor Dependency,
+         Regulatory Compliance, Operational Readiness, Rollback Feasibility),
+         use the team's historical baseline as the default and only deviate
+         if specific evidence contradicts it.
+      3. For each score, match to the rubric criteria text for the best-fit
+         level. Cite specific data points in the justification (repos, PR
+         numbers, story IDs, teams, line counts).
+      4. Flag data gaps explicitly — especially for Secure Coding (quality
+         gate status is never in code) and Resilience & Recovery (RR test
+         evidence may not be in PRs).
+      5. Flag low-confidence scores — subcriteria where the evidence is
+         ambiguous and the score could reasonably go +/- 1 level. The
+         review step will ask the user about these. Most commonly:
+         Customer Impact, Change Complexity, Testing Coverage, Rollback
+         Feasibility, Operational Readiness.
+      6. Use the Scoring Calibration section in the rubric to sanity-check
+         your scores against historical patterns.
 
-      Then calculate weighted scores:
-      - Business Impact = highest subcriterion × 3
-      - Execution Risk = average of subcriteria × 2
-      - Operational Risk = average of subcriteria × 1
-      - Total (6-18): Low (6-10), Medium (11-15), High (16-18)
+      OBJECTIVE THRESHOLDS (not subjective — apply these deterministically):
+      - Ground Stop apps (Account, BTS, ABD, CSA Mobile) = System Criticality 3, always
+      - Shared service / multi-consumer API = System Criticality 2 minimum
+      - Maintenance window: 10:30 PM - 4:00 AM = Change Window 1
+      - Soft freeze (Fri 12AM - Sun 11:59PM) = Change Window 2 minimum
+      - Hard freeze = Change Window 3
+      - SonarQube Alaska Standard = 70% coverage for Secure Coding 1
+      - PCI changes: ALL vulns resolved needed for Secure Coding 1
+      - Blast radius All Users = Customer Impact 3
+      - Blast radius Some Users = Customer Impact 2
 
-      CRAM Scoring Rubric: {{cram_template}}
+      CRAM Scoring Rubric (includes calibration data): {{cram_template}}
 
+      Risk Decision Tree Classification: {{risk_classification}}
       ADO Context (what/why): {{ado_context}}
       Code Changes (how/where): {{code_changes}}
       Pipeline Data (optional): {{pipeline_data}}
       Deployment Configs (optional): {{deployment_configs}}
       Final CR (optional, for cross-reference): {{final_cr}}
 
-      Produce the full CRAM output following the template format exactly:
-      subcriteria scores table, weighted scores calculation, risk level,
-      detailed justification per category, data gaps, and mitigations.
+      OUTPUT: You MUST produce the JSON block exactly as specified in the
+      Output Format section of the CRAM template. Wrap it in
+      ===CRAM_SCORES=== and ===END_CRAM_SCORES=== sentinels.
+      Every score must be an integer 1, 2, or 3. Every justification must
+      cite specific evidence from the expert documents.
     output: "cram_scores"
 
   # ============================================================
   # Phase 5: User Review
   # ============================================================
 
-  # Step 17: Walk through scores with user
+  # Step 18: Walk through scores with user
   - id: "review-scores"
     type: "agent"
     prompt: |
       Present the CRAM risk assessment to the user for review.
 
-      Walk through each of the 3 categories:
-      1. Show the subcriteria scores and justifications
-      2. Show the weighted calculation
-      3. Ask if the user agrees or wants to adjust any scores
+      Extract the JSON from between ===CRAM_SCORES=== and
+      ===END_CRAM_SCORES=== in the scorer output below.
 
-      Common adjustments:
-      - User knows the system tier classification
-      - User knows about mitigations not visible in the data (e.g., "we have
-        a feature flag" or "we tested this in staging for 2 weeks")
-      - User can specify the change window and freeze status
-      - User knows RR testing status and recovery time evidence
-      - User knows the SonarQube quality gate status
-      - Pipeline data was missing, user can provide rollback time estimates
+      Present each category clearly:
 
-      After all 3 categories are reviewed, show the updated total weighted
-      score and risk level.
+      **Business Impact (Weight = 3, Method: Highest × 3)**
+      For each subcriterion show: Name | Score | Justification
+      Show weighted result.
 
-      CRAM Assessment: {{cram_scores}}
+      **Execution Risk (Weight = 2, Method: Average × 2)**
+      Same format.
 
-      Your FINAL message MUST end with exactly one of these sentinels:
+      **Operational Risk (Weight = 1, Method: Average × 1)**
+      Same format.
+
+      Show the total weighted score and risk level.
+
+      IMPORTANT — USER DIALOGUE FOR UNCERTAIN SCORES:
+      After presenting scores, check TWO arrays from the scorer output:
+
+      **1. "low_confidence" — Subjective scores the scorer wasn't sure about.**
+      These are scores where the data was ambiguous, not missing. For each
+      low-confidence subcriterion, explain what the scorer found, what score
+      it chose, and why it's uncertain. Then ask the user to confirm or
+      adjust. Use targeted questions based on the subcriterion:
+
+      - **Customer Impact**: "The scorer rated this {{score}}. Would a
+        failure in this change be noticeable to guests, or is it internal-
+        only? Would it cause degraded service or a full outage?"
+      - **Change Complexity**: "The scorer rated this {{score}} based on
+        {{N}} repos. How many teams are actually coordinating on this
+        deployment? Are there integration points the code doesn't show?"
+      - **Testing Coverage**: "The scorer rated this {{score}} — no test
+        files were found in the diffs. Was testing done outside the PR
+        workflow (manual QA, staging validation, etc.)?"
+      - **Rollback Feasibility**: "The scorer estimated rollback at
+        {{score}}. What's your team's realistic rollback time for this
+        type of change?"
+      - **Operational Readiness**: "The scorer defaulted this to {{score}}.
+        Are all of these confirmed: CR doc, monitoring dashboard, on-call
+        assignment, runbook review?"
+
+      **2. "data_gaps" — Missing data that forced conservative scoring.**
+      For each gap, ask for the missing info directly:
+
+      - **Secure Coding**: "What is the SonarQube quality gate status?
+        (Standard/Security Plus/None, and any Critical/High vulnerabilities?)"
+      - **System Criticality**: "What ORBIS tier is this system?
+        (0=Infrastructure, 1=Critical ops/check-in, 2=Revenue/employee, 3=Not critical)"
+      - **Resilience & Recovery**: "Has RR testing been completed? Recovery
+        time? (Automated <1hr / Manual <2hr / Not tested)"
+      - **Change Window**: "Is the deployment during the approved maintenance
+        window, or off-hours/peak/freeze?"
+
+      Only ask about items that appear in those arrays. Do NOT ask about
+      subcriteria where the scorer had clear evidence and high confidence.
+
+      Present all questions together in a single numbered list so the user
+      can answer in one pass.
+
+      Then offer: "Any other scores you want to adjust?"
+      Common user adjustments beyond the above:
+      - Mitigations not visible in code (feature flags, staging validation)
+      - Rollback time estimates from team knowledge
+      - Testing done outside the PR workflow
+
+      If the user adjusts scores, recalculate the weighted totals and
+      risk level using the official formulas:
+      - Business Impact = highest of (1a, 1b, 1c) × 3
+      - Execution Risk = average of (2a, 2b, 2c) × 2
+      - Operational Risk = average of (3a, 3b, 3c, 3d, 3e) × 1
+      - Total = sum of weighted scores
+      - Risk: 6-10 Low, 11-15 Medium, 16-18 High
+
+      CALIBRATION CHECK: No High Risk (16-18) has ever been scored for
+      this team. Historical range is 6-15, mean 10.8. If total >= 16,
+      flag this to the user as unusual and confirm.
+
+      When the user approves, output the final scores JSON wrapped in:
       ===CRAM_APPROVED===
-      [the complete final CRAM document here]
+      {"scores": {<all 11 scores>}}
       ===END_CRAM===
+
+      Scorer output: {{cram_scores}}
     output: "reviewed_cram"
 
-  # Step 18: Output final document
-  - id: "output-cram"
-    type: "agent"
+  # Step 19: Parse approved scores and generate Excel
+  - id: "parse-approved-scores"
+    type: "bash"
     condition: "'===CRAM_APPROVED===' in reviewed_cram"
-    prompt: |
-      Output the final CRAM risk assessment document.
+    command: |
+      python3 -c "
+      import sys, json, re
+      text = sys.stdin.read()
+      m = re.search(r'===CRAM_APPROVED===\s*(\{.*?\})\s*===END_CRAM===', text, re.DOTALL)
+      if not m:
+          print('Error: Could not parse approved scores', file=sys.stderr)
+          sys.exit(1)
+      data = json.loads(m.group(1))
+      print(json.dumps(data.get('scores', data)))
+      " <<'REVIEW_EOF'
+      {{reviewed_cram}}
+      REVIEW_EOF
+    output: "final_scores_json"
 
-      Format as clean markdown suitable for:
-      1. Attaching to a change management ticket
-      2. Presenting to a change advisory board
-      3. Including alongside a Change Request Summary
+  # Step 20: Generate CRAM Excel workbook
+  - id: "generate-cram-xlsx"
+    type: "bash"
+    condition: "final_scores_json != ''"
+    command: |
+      REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+      OUTPUT_DIR="$REPO_ROOT/.claude/runtime/output"
+      mkdir -p "$OUTPUT_DIR"
+      OUTPUT_FILE="$OUTPUT_DIR/CRAM-${TIMESTAMP}.xlsx"
 
-      Extract the document from between ===CRAM_APPROVED=== and ===END_CRAM===
-      markers in the review output below. Use that as the source document.
+      # Use venv python for openpyxl; fall back to system python3
+      PYTHON="$REPO_ROOT/.venv/bin/python3"
+      if [ ! -x "$PYTHON" ]; then
+        PYTHON="python3"
+      fi
 
-      Review output: {{reviewed_cram}}
+      echo '{{final_scores_json}}' | \
+        "$PYTHON" "$REPO_ROOT/.claude/scenarios/az-devops-tools/generate_cram_xlsx.py" \
+          -o "$OUTPUT_FILE"
     output: "final_cram"
 
   # ============================================================
   # Phase 6: Reflection
   # ============================================================
 
-  # Step 19: Store discovery
+  # Step 21: Store discovery
   - id: "reflect"
     type: "agent"
     prompt: |
@@ -383,10 +586,25 @@ steps:
       - Whether context was pre-provided (from CR workflow) or fetched fresh
       - User adjustments made during review (signals where data doesn't
         capture the full picture)
+      - Risk Decision Tree classification and alignment with CRAM total score
+        (did CRAM level match tree level? If not, note the discrepancy)
+      - Objective thresholds triggered: Ground Stop, shared service, maintenance
+        window, freeze, SonarQube, PCI, blast radius — which applied, which didn't
       - Patterns observed (e.g., "repos without tests score low confidence",
         "multi-repo changes always elevate complexity")
 
-      Final CRAM: {{final_cram}}
+      Final CRAM path: {{final_cram}}
+      Approved scores: {{final_scores_json}}
+      Risk Classification: {{risk_classification}}
       ADO Context: {{ado_context}}
       Code Changes: {{code_changes}}
     output: "reflection"
+
+  # Cleanup working files
+  - id: "cleanup-working-files"
+    type: "bash"
+    command: |
+      REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      rm -rf "$REPO_ROOT/.claude/runtime/cab_working"
+      echo "Cleaned up working files"
+    output: "cleanup_status"

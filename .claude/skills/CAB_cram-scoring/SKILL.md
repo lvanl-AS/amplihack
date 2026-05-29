@@ -3,8 +3,10 @@ name: CAB_cram-scoring
 description: |
   Generates a CRAM risk assessment using the Alaska Airlines CRAM template.
   3 weighted categories, 11 subcriteria, 1-3 scale, total 6-18.
+  Includes Risk Decision Tree v0.93 classification, objective thresholds
+  (Ground Stop apps, maintenance window, SonarQube 70%), and approval routing.
   Reuses expert agents from CR workflow. Skips data fetch when context is pre-provided.
-version: 1.0.0
+version: 2.0.0
 type: skill
 auto_activate_keywords:
   - CRAM

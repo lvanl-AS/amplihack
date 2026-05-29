@@ -64,10 +64,14 @@ For each story, extract every testable requirement from AC:
 ## For Section 1: Deployment Details
 
 ### Change Title
-[Feature title — the short name for this change]
+[Feature title reformatted to Style Guide format: [Location]+[action]+[object]+[modifier]+[scope]]
+
+Use standard vocabulary: Deploy, Release, Patch, Install, Upgrade, Decommission, Restart, Reboot, DR Exercise, Uninstall. Do NOT use synonyms.
+
+Examples: "Deploy Flight Attendant API v2.7 on DNA servers", "ANCKK Upgrade network router to v10.2"
 
 ### Description of Change
-[2-3 paragraph summary: what is being changed and why, derived from feature description + story summaries. Not a dump of descriptions — a coherent narrative.]
+[2-3 paragraph summary: what is being changed and why, derived from feature description + story summaries. Written for a **business partner audience** — avoid jargon, acronyms, and technical terms unfamiliar to non-technical readers. Not a dump of descriptions — a coherent narrative.]
 
 ### Target Environments
 [If any stories or AC mention specific environments (prod, staging, etc.), extract here. Otherwise: "No environments mentioned in ADO data — user must provide."]
@@ -77,10 +81,16 @@ For each story, extract every testable requirement from AC:
 
 ## For Section 2: Impacted Systems
 
+### Ground Stop / Day-of-Travel System Check
+**CRITICAL**: Flag if ANY mentioned system is or interacts with: **Account, BTS, ABD, CSA Mobile**. These are Ground Stop / Day-of-Travel applications — automatic HIGH risk per Risk Decision Tree, regardless of change size. Even Standard Changes become Normal CRs when touching these systems.
+
+### Shared Service Check
+Flag any system described as serving multiple applications or teams. Per the Risk Decision Tree FAQ, any API consumed by multiple applications or teams is a shared service = automatic HIGH risk.
+
 ### Systems Named in Stories
-| System/Service | Mentioned In | Context | Confidence |
-|---------------|-------------|---------|------------|
-| [system] | Story #[ID] | "[quote from description/AC]" | [known] |
+| System/Service | Mentioned In | Context | Confidence | Ground Stop? | Shared Service? |
+|---------------|-------------|---------|------------|-------------|----------------|
+| [system] | Story #[ID] | "[quote from description/AC]" | [known] | [yes/no] | [yes/no/unknown] |
 
 ### Dependencies Between Systems
 [Any cross-service, ordering, or integration dependencies mentioned in stories]
@@ -123,6 +133,34 @@ The inverse of success — what would indicate the change broke something:
 | Feature | #[ID] | [title] |
 | Story | #[ID] | [title] |
 | Story | #[ID] | [title] |
+
+## For Communication Plan
+
+### Stakeholder Communication Signals
+Extract any mentions of who needs to know about this change:
+- Pre-change: [notification requirements, go/no-go calls, stakeholder signoffs mentioned in stories]
+- During: [Teams channels, status update cadence, deployment lead mentioned]
+- Post: [who confirms success, notification recipients mentioned in AC or descriptions]
+- Failure/escalation: [escalation contacts, on-call references, impacted team mentions]
+
+### Team Coordination Notes
+- [coordination requirements between teams mentioned in stories]
+- [go/no-go decision makers identified in descriptions]
+- [any sequencing or handoff notes between teams]
+
+If no communication signals found in stories, say "No communication signals found in ADO data — user must provide."
+
+## For Risk Decision Tree Classification
+
+### Blast Radius Assessment
+Based on story descriptions and AC:
+- Does this change affect all users or a subset? [all / some / limited / unknown]
+- Is this guest-facing or internal-only? [guest-facing / internal / mixed / unknown]
+- Evidence: [quote from stories supporting the assessment]
+
+### Testing Completeness Signal
+- Are stories indicating full testing in mirror environments? [yes / partial / no / not mentioned]
+- Evidence: [any AC or story notes about testing environments]
 ```
 
 ## Behaviors

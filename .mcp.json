@@ -11,7 +11,16 @@
         "-d", "core", "work-items", "repositories", "pipelines", "work", "search", "wiki", "test-plans"
       ],
       "env": {
-        "AZURE_DEVOPS_EXT_PAT": "${AZURE_DEVOPS_EXT_PAT}"
+        "AZURE_DEVOPS_EXT_PAT": "${AZURE_DEVOPS_EXT_PAT}",
+        "PERSONAL_ACCESS_TOKEN": "${AZURE_DEVOPS_EXT_PAT}"
+      }
+    },
+    "github": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
       }
     },
     "workiq": {

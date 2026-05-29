@@ -1,0 +1,683 @@
+name: "CAB_cherwell-form"
+description: "Pre-fill all 21 Cherwell portal form fields from ADO stories and linked PRs. Skips data fetch phases when expert context is pre-provided."
+version: "1.0.0"
+author: "Amplihack Team"
+tags: ["release", "change-management", "cherwell", "cab"]
+
+context:
+  selected_workspace: ""
+  story_ids: ""
+  feature_id: ""
+  # Pre-computed (from CR recipe) — skip phases 1-4 if provided
+  ado_context: ""
+  code_changes: ""
+  pipeline_data: ""
+  deployment_configs: ""
+  risk_classification: ""
+  reviewed_cr: ""
+  # Internal state
+  auth_status: ""
+  expanded_story_ids: ""
+  all_story_ids: ""
+  stories_data: ""
+  feature_ids: ""
+  features_data: ""
+  linked_prs: ""
+  checkpoint_result: ""
+  additional_pr_ids: ""
+  additional_prs: ""
+  repo_names: ""
+  # Outputs
+  classify_fields: ""
+  questionnaire_answers: ""
+  communication_plan: ""
+  cherwell_form_summary: ""
+  persist_status: ""
+  cleanup_status: ""
+  reflection: ""
+
+steps:
+  # ============================================================
+  # Phase 1a: Story & Feature Fetch
+  # SKIPPED when ado_context and code_changes are already provided.
+  # ============================================================
+
+  # Step 1: Auth check
+  - id: "auth-check"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/auth_check.py \
+        --workspace "{{selected_workspace}}" --quiet
+    output: "auth_status"
+
+  # Step 2: If feature_id provided, expand to child story IDs
+  - id: "expand-feature"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and feature_id != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_child_ids.py \
+        --parent-id {{feature_id}} \
+        --workspace "{{selected_workspace}}"
+    output: "expanded_story_ids"
+
+  # Step 3: Combine story_ids + expanded_story_ids, deduplicate
+  - id: "combine-story-ids"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/combine_ids.py <<'IDS_EOF'
+      {{story_ids}}
+      {{expanded_story_ids}}
+      IDS_EOF
+    output: "all_story_ids"
+
+  # Step 4: Fetch all stories with relations
+  - id: "fetch-stories"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and all_story_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_child_stories.py \
+        --ids "{{all_story_ids}}" \
+        --workspace "{{selected_workspace}}"
+    output: "stories_data"
+
+  # Step 5: Extract parent feature IDs from story relations
+  - id: "extract-parent-features"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and stories_data != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_parent_ids.py <<'STORIES_EOF'
+      {{stories_data}}
+      STORIES_EOF
+    output: "feature_ids"
+
+  # Step 6: Fetch parent features for context
+  - id: "fetch-features"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and feature_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_child_stories.py \
+        --ids "{{feature_ids}}" \
+        --workspace "{{selected_workspace}}"
+    output: "features_data"
+
+  # Step 7: Fetch linked PRs for all stories
+  - id: "fetch-linked-prs"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and all_story_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_linked_prs.py \
+        --ids "{{all_story_ids}}" \
+        --workspace "{{selected_workspace}}" \
+        --detail
+    output: "linked_prs"
+
+  # ============================================================
+  # Phase 1b: PR Checkpoint
+  # SKIPPED when expert context is pre-provided.
+  # ============================================================
+
+  # Step 8: Present stories + PRs, ask for additional PRs
+  - id: "pr-checkpoint"
+    type: "agent"
+    condition: "ado_context == '' or code_changes == ''"
+    prompt: |
+      You are reviewing the contents of a deployment before pre-filling
+      the Cherwell form.
+
+      Present a clean summary of what was found:
+
+      **Stories in this assessment:**
+      For each story, show: ID, Title, State, Assigned To
+
+      **Parent Feature(s):**
+      For each feature, show: ID, Title
+
+      **PRs linked to stories:**
+      For each PR, show: PR ID, Title, Repository, Status, Linked Story ID
+
+      Stories: {{stories_data}}
+      Features: {{features_data}}
+      Linked PRs: {{linked_prs}}
+
+      Then ask:
+
+      "These PRs were found automatically from your ADO stories.
+      Are there any additional PRs that should be included in this
+      Cherwell form pre-fill? Provide PR IDs (comma-separated), or say 'none'."
+
+      After the user responds, confirm the complete list.
+
+      Your FINAL message MUST end with exactly this block:
+      ===ADDITIONAL_DATA===
+      PRS: <comma-separated additional PR IDs, or leave blank>
+      ===END_ADDITIONAL_DATA===
+    output: "checkpoint_result"
+
+  # Step 9: Parse additional PR IDs from checkpoint
+  - id: "parse-additional-prs"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/parse_checkpoint.py --field prs <<'CHECKPOINT_EOF'
+      {{checkpoint_result}}
+      CHECKPOINT_EOF
+    output: "additional_pr_ids"
+
+  # Step 10: Fetch additional standalone PRs
+  - id: "fetch-additional-prs"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and additional_pr_ids != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_prs_by_ids.py \
+        --ids "{{additional_pr_ids}}" \
+        --workspace "{{selected_workspace}}" \
+        --detail
+    output: "additional_prs"
+
+  # ============================================================
+  # Phase 2: Deployment Data Fetch
+  # SKIPPED when expert context is pre-provided (pipeline_data
+  # and deployment_configs passed in directly).
+  # ============================================================
+
+  # Step 11: Extract unique repo names from all PR sources
+  - id: "extract-repo-names"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_repo_names.py <<'PR_DATA_EOF'
+      {{linked_prs}}
+      ===SOURCE===
+      {{additional_prs}}
+      PR_DATA_EOF
+    output: "repo_names"
+
+  # Step 12: Fetch deployment.yaml from each repo
+  - id: "fetch-deployment-configs"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and repo_names != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_repo_file.py \
+        --repository "{{repo_names}}" \
+        --path deployment.yaml \
+        --workspace "{{selected_workspace}}"
+    output: "deployment_configs"
+
+  # Step 13: Fetch pipeline definitions and recent runs
+  - id: "fetch-pipeline-data"
+    type: "bash"
+    condition: "(ado_context == '' or code_changes == '') and repo_names != ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_pipeline_runs.py \
+        --repositories "{{repo_names}}" \
+        --workspace "{{selected_workspace}}" \
+        --top 5
+    output: "pipeline_data"
+
+  # ============================================================
+  # Phase 3: Expert Understanding
+  # SKIPPED when ado_context and code_changes are pre-provided.
+  # ============================================================
+
+  # Step 14: ADO Context Expert — Cherwell form signals
+  - id: "ado-context-expert"
+    type: "agent"
+    agent: "ado-context-expert"
+    condition: "ado_context == '' or code_changes == ''"
+    prompt: |
+      Build a structured context reference document from the ADO data.
+      This will be used for Cherwell portal form pre-fill: Classify fields,
+      Risk Assessment Questionnaire, and Communication Plan.
+
+      Focus on extracting:
+      - Change description and scope (for Change Title — Style Guide format)
+      - System classification: Ground Stop app? Shared Service? (for Classify + Risk Tree)
+      - Blast radius assessment: All Users / Some Users / Limited (for Risk Tree + Q1)
+      - Acceptance criteria completeness and clarity (for Q3 verification difficulty)
+      - Testing evidence and gaps (for Q10, Q11, Q12)
+      - Communication signals: stakeholder mentions, team coordination, go/no-go calls (for Communication Plan)
+      - Success criteria: who confirms deployment success (for Post-Change Communication)
+      - Deployment timing references (for Q8 maintenance window check)
+
+      Stories: {{stories_data}}
+      Features: {{features_data}}
+    output: "ado_context"
+
+  # Step 15: Code Changes Expert — Cherwell form signals
+  - id: "code-changes-expert"
+    type: "agent"
+    agent: "code-changes-expert"
+    condition: "ado_context == '' or code_changes == ''"
+    prompt: |
+      Build a structured code changes reference document from all PR data.
+      This will be used for Cherwell portal form pre-fill: Classify fields,
+      Risk Assessment Questionnaire, and Communication Plan.
+
+      Focus on extracting:
+      - What is changing: Application Code / Server / Database / etc. (for Cherwell Classify)
+      - Primary impacted system: main repo or service name (for Cherwell Classify)
+      - How is it changing: New / Patch / Update/Maintenance / Decommission (for Cherwell Classify)
+      - Repo count, team count, integration depth (for Q1 complexity)
+      - Pipeline configs and automation presence (for Q2)
+      - Test files in diffs, PR review status (for Q10)
+      - Rollback signals: feature flags, migration files, deployment configs (for Q4, Q5)
+      - Ground Stop app detection: Account, BTS, ABD, CSA Mobile (for Risk Tree)
+      - Shared Service detection: multi-consumer APIs, middleware (for Risk Tree)
+      - Blast radius from code perspective (for Risk Tree)
+      - Repos with code changes but no test changes (for Q12 concerns)
+
+      Linked PRs: {{linked_prs}}
+      Additional PRs: {{additional_prs}}
+    output: "code_changes"
+
+  # ============================================================
+  # Phase 4: Risk Classification
+  # SKIPPED when risk_classification is pre-provided.
+  # ============================================================
+
+  # Step 16: Risk Decision Tree classification (standalone only)
+  - id: "risk-decision-tree"
+    type: "agent"
+    condition: "risk_classification == ''"
+    prompt: |
+      Classify this change using the Alaska Airlines Risk Decision Tree v0.93.
+      This is a DETERMINISTIC algorithm — follow the tree exactly.
+
+      DECISION TREE (evaluate in order, stop at first match):
+
+      1. Does this change impact or interact with a Ground Stop App or
+         Customer Facing App? (Account, BTS, ABD, CSA Mobile)
+         Check ADO Context → Section 2 → Ground Stop flags
+         Check Code Changes → Section 2 → Ground Stop flags
+         → YES → **HIGH RISK**
+
+      2. Does the change affect any Shared Service?
+         (Network, middleware, API consumed by multiple apps/teams)
+         Check ADO Context → Section 2 → Shared Service flags
+         Check Code Changes → Section 2 → Shared Service / Multi-Consumer API flags
+         → YES → **HIGH RISK**
+
+      3. If the Change Fails, what is the blast radius?
+         Check ADO Context → Risk Decision Tree → Blast Radius Assessment
+         Check Code Changes → Risk Decision Tree → Blast Radius from Code Perspective
+         → All Users → **HIGH RISK**
+         → Some Users → **MEDIUM RISK**
+
+      4. Change is fully tested in a mirror of the live environment?
+         Check ADO Context → Risk Decision Tree → Testing Completeness Signal
+         Check Code Changes → Risk Decision Tree → Mirror Testing Signal
+         → Less than 100% Tested → **MEDIUM RISK**
+         → 100% Successfully Tested → **LOW RISK**
+
+      5. All Other Changes:
+         → If Standard Change → **LOW RISK**
+         → Otherwise → **MEDIUM RISK**
+
+      OUTPUT your classification as:
+      ===RISK_CLASSIFICATION===
+      RISK_LEVEL: <LOW/MEDIUM/HIGH>
+      TREE_BRANCH: <which branch was triggered>
+      GROUND_STOP: <true/false>
+      SHARED_SERVICE: <true/false>
+      BLAST_RADIUS: <all_users/some_users/limited/unknown>
+      MIRROR_TESTED: <yes/no/unknown>
+
+      APPROVAL_REQUIRED:
+      - Normal period: <approvals needed>
+      - Soft freeze (Fri-Sun): <additional approvals if applicable>
+      - Hard freeze: <additional approvals if applicable>
+
+      CHANGE_TYPE_GUIDANCE:
+      - <guidance based on classification>
+
+      DEADLINE_REMINDER:
+      - Friday 6:00 PM PST: CR submission deadline
+      - Thursday 2:00 PM PST: CAB meeting
+      ===END_RISK_CLASSIFICATION===
+
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+    output: "risk_classification"
+
+  # Persist expert context to working directory for context compaction resilience
+  - id: "persist-expert-context"
+    type: "bash"
+    condition: "ado_context != '' and code_changes != ''"
+    command: |
+      REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      WORKING_DIR="$REPO_ROOT/.claude/runtime/cab_working"
+      mkdir -p "$WORKING_DIR"
+      cat <<'PERSIST_ADO_EOF' > "$WORKING_DIR/ado_context.md"
+      {{ado_context}}
+      PERSIST_ADO_EOF
+      cat <<'PERSIST_CODE_EOF' > "$WORKING_DIR/code_changes.md"
+      {{code_changes}}
+      PERSIST_CODE_EOF
+      cat <<'PERSIST_RISK_EOF' > "$WORKING_DIR/risk_classification.md"
+      {{risk_classification}}
+      PERSIST_RISK_EOF
+      cat <<'PERSIST_PIPE_EOF' > "$WORKING_DIR/pipeline_data.md"
+      {{pipeline_data}}
+      PERSIST_PIPE_EOF
+      cat <<'PERSIST_DEPLOY_EOF' > "$WORKING_DIR/deployment_configs.md"
+      {{deployment_configs}}
+      PERSIST_DEPLOY_EOF
+      echo "Persisted expert context to $WORKING_DIR"
+    output: "persist_status"
+
+  # ============================================================
+  # Phase 5: Cherwell Form Pre-fill
+  # Always runs — these are the core output steps.
+  # ============================================================
+
+  # Step 17: Cherwell Classify/New Screen Fields
+  - id: "cherwell-classify-fields"
+    type: "agent"
+    prompt: |
+      Pre-fill the 5 Cherwell Classify/New Screen fields using available data.
+      Present each field with evidence, suggested value, and confidence level.
+      Ask the user to confirm or adjust.
+
+      INTEGRATED MODE CHECK:
+      If reviewed_cr is provided, it likely contains a "Cherwell Form Fields"
+      section in the Section 1 output (from the CR auto-sections agent).
+      Extract these values as the starting point and present for confirmation
+      rather than recomputing from scratch. If reviewed_cr is empty, compute
+      all fields from the expert context.
+
+      FIELDS TO PRE-FILL:
+
+      1. **Change Title**
+         Style Guide format: [Location (as needed)] + [action] + [object] + [modifier] + [scope]
+         Standard vocabulary: Install, Deploy, Uninstall, Upgrade, Patch, Release,
+         Decommission, Restart, Reboot, DR Exercise
+         Source: ADO Context (feature/story titles, business justification)
+         Examples: "Deploy Flight Attendant API v2.7 on DNA servers"
+
+      2. **What Are You Changing?**
+         Options: Laptop/Desktop, Mobile Device, Application Code, Server,
+         Database, Storage, Network, Firewall, Mainframe
+         Source: Code Changes (file types, repo names, PR descriptions)
+         Default for most software teams: "Application Code"
+
+      3. **Where Is It Changing?**
+         Options: MyGate Data Center, Sealand Data Center, SEQ Data Center,
+         Cloud, Corporate, Horizon GQ, Center Point, Flight Ops, GCC,
+         MyGate Building, Street, BSM Data Center (VA), SAC Data Center (VA),
+         SCD Data Center (VA)
+         Source: Deployment configs (if available), otherwise ask user
+         Often [needs input] — mark as such if unknown
+
+      4. **How Is It Changing?**
+         Options: New, Patch, Update/Maintenance, Decommission
+         Source: ADO Context (story type, feature description) + Code Changes
+         (new vs modified files ratio, PR descriptions)
+
+      5. **Primary Impacted System**
+         System name (must match Cherwell dropdown)
+         Source: Code Changes (primary repo/service name)
+
+      Present as:
+      ## Cherwell Classify/New Screen Fields — Pre-filled
+
+      | Field | Suggested Value | Confidence |
+      |-------|----------------|------------|
+      | Change Title | [value] | [auto/draft/needs-input] |
+      | What Are You Changing? | [value] | [auto/draft] |
+      | Where Is It Changing? | [value] | [draft/needs-input] |
+      | How Is It Changing? | [value] | [auto/draft] |
+      | Primary Impacted System | [value] | [auto/draft] |
+
+      Please confirm each or tell me what to adjust.
+
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+      Deployment Configs: {{deployment_configs}}
+      Risk Classification: {{risk_classification}}
+      Reviewed CR (if available): {{reviewed_cr}}
+    output: "classify_fields"
+
+  # Step 18: Cherwell Risk Assessment Questionnaire (12 Questions)
+  - id: "cherwell-questionnaire"
+    type: "agent"
+    prompt: |
+      Pre-fill answers to the 12 Cherwell Risk Assessment Questionnaire
+      questions using available data. Present each answer with evidence and
+      ask the user to confirm or adjust.
+
+      These questions are answered directly in the Cherwell form and drive the
+      system's risk calculation (Low/Medium/High). The Risk Decision Tree
+      classification provides the target risk level — answers should be
+      consistent with it.
+
+      QUESTIONS AND PRE-FILL LOGIC:
+
+      1. **How Complex Is This Change?**
+         From Code Changes → Cherwell Classify Fields → Complexity signal
+         (repo count, team count, integration depth)
+         Map: 1-2 repos = Simple, 3-4 = Moderate, 5+ = Complex/Very Complex
+
+      2. **Is This Change Using Automation Tools To Reduce Manual Steps?**
+         From pipeline data: pipeline-deployed = Yes, manual = No
+
+      3. **How Difficult Is It To Verify The Change Completed Successfully?**
+         From ADO Context → Testing: AC completeness and clarity of validation
+         Map: Clear AC with specific checks = Easy, Vague AC = Moderate, No AC = Difficult
+
+      4. **Does This Change Have a Back Out Plan?**
+         If reviewed_cr provided: check Section 3 for rollback steps → Yes
+         If fail-forward only → No (but explain mitigation)
+         If standalone: check deployment configs and pipeline data for rollback signals
+
+      5. **How Long to Back Out of This Change?**
+         If reviewed_cr provided: from Section 3 → Estimated Rollback Time
+         If standalone: from pipeline run history → rollback duration, convert to minutes, round up
+
+      6. **Will This Change Require an Outage?**
+         From deployment configs: outage window mentioned? Service restart needed?
+         If no evidence either way, ask user.
+
+      7. **If the Change Fails, Is the System Recoverable Within the Outage Window?**
+         From rollback time estimate vs planned outage window
+
+      8. **Does This Change Fall Within the 10:30pm - 4:00am Maintenance Window? (Or During an Approved Exception Period)**
+         If deployment time is known, check against 10:30 PM - 4:00 AM window.
+         If unknown, ask user.
+
+      9. **How Many Times Has This Change Been Successful?**
+         From pipeline run history: count of successful runs against main branch.
+         For Standard Change eligibility, need 4+ successful error-free runs.
+
+      10. **Has This Change Been Tested?**
+          From Code Changes → Testing: test files in diffs, test descriptions in PRs.
+          If no test evidence, ask user (testing may happen outside PR workflow).
+
+      11. **Have You Documented and Archived Proof of Testing?**
+          Cannot auto-fill — ask user directly.
+
+      12. **List any remaining concerns regarding testing this change.**
+          From expert Testing gaps + coherence flags about testing.
+          Draft concerns from: repos with code changes but no test changes,
+          stories with no AC, compound AC that should be split.
+
+      CONSISTENCY CHECKS:
+      - Answers should be consistent with Risk Decision Tree classification
+      - If Q1 says Complex/Very Complex but tree says LOW, flag the discrepancy
+      - Standard Change checks: Q9 needs 4+ successes, Q1 must be Simple/Moderate
+
+      Present as a numbered list. For each question show:
+      - The question
+      - Pre-filled answer with evidence citation
+      - Confidence level (auto/draft/needs-input)
+      - "Confirm or adjust?"
+
+      At the end, show:
+      **Estimated Cherwell Risk Level**: [Low/Medium/High based on answers]
+      **Risk Decision Tree Classification**: [from risk_classification]
+      **Alignment check**: [consistent / DISCREPANCY — explain]
+
+      Risk Decision Tree Classification: {{risk_classification}}
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+      Pipeline Data: {{pipeline_data}}
+      Deployment Configs: {{deployment_configs}}
+      Reviewed CR (if available): {{reviewed_cr}}
+    output: "questionnaire_answers"
+
+  # Step 19: Cherwell Communication Plan
+  - id: "cherwell-communication-plan"
+    type: "agent"
+    prompt: |
+      Pre-fill the Cherwell Communication Plan tab fields using available data.
+      The Communication Plan is filled directly in the Cherwell form
+      "Communications Plan" tab — it is NOT a section in the CR summary document.
+
+      Required for ALL change types. Present each field with a pre-filled
+      suggestion (if data available) and ask the user to confirm or adjust.
+
+      FIELDS TO PRE-FILL:
+
+      1. **Pre-Change Communication**
+         Who needs to know before the change, and what to tell them.
+         From ADO Context → Communication Signals: stakeholder mentions,
+         team coordination notes, go/no-go calls mentioned in stories.
+         If no signals found: ask user directly.
+
+      2. **During-Change Communication**
+         How status updates will be shared during implementation.
+         Suggest: Teams channel (from Section 4 On-Call Channel if available
+         in reviewed_cr), deployment status updates at key milestones.
+         If no signals: ask user for preferred channel.
+
+      3. **Post-Change Communication**
+         Who to notify of completion, and how to verify.
+         From ADO Context → Success Criteria: who confirms success.
+         Suggest standard: "Notify [team] via [channel] once deployment
+         verified against success criteria."
+
+      4. **Failure Communication**
+         Who to notify if rollback is triggered.
+         If reviewed_cr provided: from Section 4 (Alerting) → On-Call Channel,
+         from Section 2 (Impacted Systems) → list all impacted teams.
+         Must cover ALL impacted systems.
+         If standalone: from ADO Context → impacted teams and stakeholders.
+
+      Present as:
+      ## Cherwell Communication Plan — Pre-filled
+
+      | Field | Suggested Value | Confidence |
+      |-------|----------------|------------|
+      | Pre-Change Communication | [value] | [auto/draft/needs-input] |
+      | During-Change Communication | [value] | [auto/draft/needs-input] |
+      | Post-Change Communication | [value] | [auto/draft/needs-input] |
+      | Failure Communication | [value] | [auto/draft/needs-input] |
+
+      Please confirm each or tell me what to adjust.
+
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+      Risk Classification: {{risk_classification}}
+      Reviewed CR (if available): {{reviewed_cr}}
+    output: "communication_plan"
+
+  # ============================================================
+  # Phase 6: Summary
+  # ============================================================
+
+  # Step 20: Cherwell Form Summary — all 21 fields
+  - id: "cherwell-form-summary"
+    type: "agent"
+    prompt: |
+      Combine all confirmed Cherwell form field values into a unified summary
+      ready for copy/paste into the Cherwell portal.
+
+      Present the final summary in 3 sections:
+
+      ## Cherwell Form Summary — All Fields
+
+      ### 1. Classify/New Screen
+      | Field | Value |
+      |-------|-------|
+      | Change Title | [from classify_fields] |
+      | What Are You Changing? | [from classify_fields] |
+      | Where Is It Changing? | [from classify_fields] |
+      | How Is It Changing? | [from classify_fields] |
+      | Primary Impacted System | [from classify_fields] |
+
+      ### 2. Risk Assessment Questionnaire (12 Questions)
+      [Numbered list of all 12 confirmed answers from questionnaire_answers]
+
+      **Estimated Cherwell Risk Level**: [Low/Medium/High]
+      **Risk Decision Tree Classification**: [from risk_classification]
+      **Alignment**: [consistent / discrepancy noted]
+
+      ### 3. Communication Plan
+      | Field | Value |
+      |-------|-------|
+      | Pre-Change Communication | [from communication_plan] |
+      | During-Change Communication | [from communication_plan] |
+      | Post-Change Communication | [from communication_plan] |
+      | Failure Communication | [from communication_plan] |
+
+      ---
+      **Total fields**: 21 (5 Classify + 12 Questionnaire + 4 Communication Plan)
+      **Auto-filled**: [count] | **User-provided**: [count] | **Needs input**: [count]
+
+      "This summary contains all the data needed to fill the Cherwell portal.
+      Copy the values into the corresponding Cherwell fields. Is this complete?"
+
+      After the user confirms, output:
+
+      ---
+      **CR Manifest Reminder**: Don't forget your required attachments:
+      - Runbook
+      - Diagrams
+      - Deployment Plan
+      - Rollback Plan
+      - Test Plan
+      - Communication Plan
+      - Additional Approvals
+
+      Classify Fields: {{classify_fields}}
+      Questionnaire Answers: {{questionnaire_answers}}
+      Communication Plan: {{communication_plan}}
+      Risk Classification: {{risk_classification}}
+    output: "cherwell_form_summary"
+
+  # ============================================================
+  # Phase 7: Reflection
+  # ============================================================
+
+  # Step 21: Store discovery
+  - id: "reflect"
+    type: "agent"
+    prompt: |
+      Store discovery for category "CAB_cherwell-form":
+      - How many of 21 fields were auto-filled vs drafted vs user-provided
+      - Risk Decision Tree classification and which branch triggered
+      - Alignment between Risk Decision Tree and questionnaire-estimated risk level
+      - Whether context was pre-provided (integrated) or fetched fresh (standalone)
+      - User adjustments: which fields were changed from pre-filled values
+      - Data gaps: which fields lacked evidence and needed user input
+      - Ground Stop app detected? Which system?
+      - Shared service detected? Which service?
+      - Standard Change eligibility: Q1 and Q9 values, any disqualifiers
+      - Patterns observed (e.g., "no deployment.yaml", "no test files in PRs")
+
+      Classify Fields: {{classify_fields}}
+      Questionnaire Answers: {{questionnaire_answers}}
+      Communication Plan: {{communication_plan}}
+      Risk Classification: {{risk_classification}}
+      Cherwell Form Summary: {{cherwell_form_summary}}
+    output: "reflection"
+
+  # Cleanup working files
+  - id: "cleanup-working-files"
+    type: "bash"
+    command: |
+      REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      rm -rf "$REPO_ROOT/.claude/runtime/cab_working"
+      echo "Cleaned up working files"
+    output: "cleanup_status"

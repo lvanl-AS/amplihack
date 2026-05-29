@@ -44,10 +44,17 @@ Activate when the user:
 
 ## Execution
 
-Board selection runs before the recipe so the recipe runner never needs TTY access.
+Board selection is driven by Claude (no TTY needed).
 
 ```bash
-WORKSPACE=$(python .claude/scenarios/az-devops-tools/select_board.py)
+# Step 1: Get known boards
+BOARDS=$(python3 .claude/scenarios/az-devops-tools/select_board.py --list)
+# Step 2: If one board → auto-select its alias as WORKSPACE
+#         If multiple → present list to user, ask which one
+#         If user wants a different board → --search "<term>", present results,
+#           then --save --org <org> --project <project> --team <team> to persist
+# Step 3: Resolve selection
+WORKSPACE=$(python3 .claude/scenarios/az-devops-tools/select_board.py --select "<alias>")
 
 amplihack recipe run amplifier-bundle/recipes/ado-feature-creation.yaml \
   -c selected_workspace="$WORKSPACE" \

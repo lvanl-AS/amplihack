@@ -1,0 +1,310 @@
+name: "CAB_risk-classification"
+description: "Classify a change using the Alaska Airlines Risk Decision Tree v0.93. Skips data fetch phases when expert context is pre-provided."
+version: "1.0.0"
+author: "Amplihack Team"
+tags: ["release", "risk-assessment", "change-management", "risk-classification"]
+
+context:
+  selected_workspace: ""
+  # Primary input: story IDs (comma-separated)
+  story_ids: ""
+  # Optional: feature ID to expand into story IDs
+  feature_id: ""
+  # Pre-computed context (from CR workflow). If both ado_context and
+  # code_changes are non-empty, Phases 1-3 are skipped entirely.
+  ado_context: ""
+  code_changes: ""
+  # Internal state
+  auth_status: ""
+  expanded_story_ids: ""
+  all_story_ids: ""
+  stories_data: ""
+  feature_ids: ""
+  features_data: ""
+  linked_prs: ""
+  checkpoint_result: ""
+  additional_pr_ids: ""
+  additional_prs: ""
+  repo_names: ""
+  risk_classification: ""
+  reflection: ""
+
+steps:
+  # ============================================================
+  # Phase 1a: Story & Feature Fetch
+  # SKIPPED when ado_context and code_changes are already provided.
+  # ============================================================
+
+  # Step 1: Auth check
+  - id: "auth-check"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/auth_check.py \
+        --workspace "{{selected_workspace}}" --quiet
+    output: "auth_status"
+
+  # Step 2: If feature_id provided, expand to child story IDs
+  - id: "expand-feature"
+    type: "bash"
+    condition: "feature_id != '' and (ado_context == '' or code_changes == '')"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_child_ids.py \
+        --parent-id {{feature_id}} \
+        --workspace "{{selected_workspace}}"
+    output: "expanded_story_ids"
+
+  # Step 3: Combine story_ids + expanded_story_ids, deduplicate
+  - id: "combine-story-ids"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/combine_ids.py <<'IDS_EOF'
+      {{story_ids}}
+      {{expanded_story_ids}}
+      IDS_EOF
+    output: "all_story_ids"
+
+  # Step 4: Fetch all stories with relations
+  - id: "fetch-stories"
+    type: "bash"
+    condition: "all_story_ids != '' and (ado_context == '' or code_changes == '')"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_child_stories.py \
+        --ids "{{all_story_ids}}" \
+        --workspace "{{selected_workspace}}"
+    output: "stories_data"
+
+  # Step 5: Extract parent feature IDs from story relations
+  - id: "extract-parent-features"
+    type: "bash"
+    condition: "stories_data != '' and (ado_context == '' or code_changes == '')"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/extract_parent_ids.py <<'STORIES_EOF'
+      {{stories_data}}
+      STORIES_EOF
+    output: "feature_ids"
+
+  # Step 6: Fetch parent features for context
+  - id: "fetch-features"
+    type: "bash"
+    condition: "feature_ids != '' and (ado_context == '' or code_changes == '')"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_child_stories.py \
+        --ids "{{feature_ids}}" \
+        --workspace "{{selected_workspace}}"
+    output: "features_data"
+
+  # Step 7: Fetch linked PRs for all stories
+  - id: "fetch-linked-prs"
+    type: "bash"
+    condition: "all_story_ids != '' and (ado_context == '' or code_changes == '')"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/get_linked_prs.py \
+        --ids "{{all_story_ids}}" \
+        --workspace "{{selected_workspace}}" \
+        --detail
+    output: "linked_prs"
+
+  # ============================================================
+  # Phase 1b: PR Checkpoint
+  # SKIPPED when expert context is pre-provided.
+  # ============================================================
+
+  # Step 8: PR checkpoint
+  - id: "pr-checkpoint"
+    type: "agent"
+    condition: "ado_context == '' or code_changes == ''"
+    prompt: |
+      Present stories and linked PRs found. Ask if additional PRs should be included.
+
+      Stories: {{stories_data}}
+      Features: {{features_data}}
+      Linked PRs: {{linked_prs}}
+
+      Ask: "Are there additional PRs? Provide IDs or say 'none'."
+
+      End with:
+      ===ADDITIONAL_DATA===
+      PRS: <comma-separated IDs or blank>
+      ===END_ADDITIONAL_DATA===
+    output: "checkpoint_result"
+
+  # Step 9: Parse additional PR IDs
+  - id: "parse-additional-prs"
+    type: "bash"
+    condition: "ado_context == '' or code_changes == ''"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/parse_checkpoint.py --field prs <<'CHECKPOINT_EOF'
+      {{checkpoint_result}}
+      CHECKPOINT_EOF
+    output: "additional_pr_ids"
+
+  # Step 10: Fetch additional PRs
+  - id: "fetch-additional-prs"
+    type: "bash"
+    condition: "additional_pr_ids != '' and (ado_context == '' or code_changes == '')"
+    command: |
+      python3 .claude/scenarios/az-devops-tools/fetch_prs_by_ids.py \
+        --ids "{{additional_pr_ids}}" \
+        --workspace "{{selected_workspace}}" \
+        --detail
+    output: "additional_prs"
+
+  # ============================================================
+  # Phase 3: Expert Understanding
+  # SKIPPED when ado_context and code_changes are pre-provided.
+  # Phase 2 (deployment data fetch) is skipped entirely for risk
+  # classification — it doesn't need deployment configs or
+  # pipeline data.
+  # ============================================================
+
+  # Step 11: ADO Context Expert
+  - id: "ado-context-expert"
+    type: "agent"
+    condition: "ado_context == ''"
+    agent: "ado-context-expert"
+    prompt: |
+      Build a structured context reference document focusing on risk signals.
+
+      Focus areas:
+      - Ground Stop / Day-of-Travel apps (Account, BTS, ABD, CSA Mobile)
+      - Shared services / multi-consumer APIs
+      - Blast radius assessment (all users / some users / limited)
+      - Testing completeness signals
+      - Guest flows / touchpoints affected
+
+      Stories: {{stories_data}}
+      Features: {{features_data}}
+    output: "ado_context"
+
+  # Step 12: Code Changes Expert
+  - id: "code-changes-expert"
+    type: "agent"
+    condition: "code_changes == ''"
+    agent: "code-changes-expert"
+    prompt: |
+      Build a structured code changes reference focusing on risk signals.
+
+      Focus areas:
+      - Ground Stop / Day-of-Travel apps (Account, BTS, ABD, CSA Mobile)
+      - Shared services / multi-consumer APIs
+      - Number of systems directly modified
+      - Blast radius if any repo fails
+      - Mirror testing signals
+      - Feature flag changes
+
+      Linked PRs: {{linked_prs}}
+      Additional PRs: {{additional_prs}}
+    output: "code_changes"
+
+  # ============================================================
+  # Phase 4: Risk Decision Tree Classification
+  # Deterministic risk classification from expert outputs.
+  # ============================================================
+
+  # Step 13: Risk Decision Tree classification
+  - id: "risk-decision-tree"
+    type: "agent"
+    prompt: |
+      Classify this change using the Alaska Airlines Risk Decision Tree v0.93.
+      This is a DETERMINISTIC algorithm — follow the tree exactly.
+
+      DECISION TREE (evaluate in order, stop at first match):
+
+      1. Does this change impact or interact with a Ground Stop App or
+         Customer Facing App? (Account, BTS, ABD, CSA Mobile)
+         Check ADO Context → Section 2 → Ground Stop flags
+         Check Code Changes → Section 2 → Ground Stop flags
+         → YES → **HIGH RISK**
+
+      2. Does the change affect any Shared Service?
+         (Network, middleware, API consumed by multiple apps/teams)
+         Check ADO Context → Section 2 → Shared Service flags
+         Check Code Changes → Section 2 → Shared Service / Multi-Consumer API flags
+         → YES → **HIGH RISK**
+
+      3. If the Change Fails, what is the blast radius?
+         Check ADO Context → Risk Decision Tree → Blast Radius Assessment
+         Check Code Changes → Risk Decision Tree → Blast Radius from Code Perspective
+         → All Users → **HIGH RISK**
+         → Some Users → **MEDIUM RISK**
+
+      4. Change is fully tested in a mirror of the live environment?
+         Check ADO Context → Risk Decision Tree → Testing Completeness Signal
+         Check Code Changes → Risk Decision Tree → Mirror Testing Signal
+         → Less than 100% Tested → **MEDIUM RISK**
+         → 100% Successfully Tested → **LOW RISK**
+
+      5. All Other Changes:
+         → If Standard Change → **LOW RISK**
+         → Otherwise → **MEDIUM RISK**
+
+      OUTPUT your classification as:
+      ===RISK_CLASSIFICATION===
+      RISK_LEVEL: <LOW/MEDIUM/HIGH>
+      TREE_BRANCH: <which branch was triggered — e.g., "Ground Stop App detected: Account">
+      GROUND_STOP: <true/false>
+      SHARED_SERVICE: <true/false>
+      BLAST_RADIUS: <all_users/some_users/limited/unknown>
+      MIRROR_TESTED: <yes/no/unknown>
+
+      APPROVAL_REQUIRED:
+      - Normal period: <approvals needed>
+      - Soft freeze (Fri-Sun): <additional approvals if applicable>
+      - Hard freeze: <additional approvals if applicable>
+
+      CHANGE_TYPE_GUIDANCE:
+      - <If HIGH and might be Standard → "Cannot use Standard Change path. Must submit as Normal CR.">
+      - <If risk level suggests specific change type guidance>
+
+      DEADLINE_REMINDER:
+      - Friday 6:00 PM PST: CR submission deadline for Monday VP review
+      - Thursday 2:00 PM PST: CAB meeting
+      ===END_RISK_CLASSIFICATION===
+
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+    output: "risk_classification"
+
+  # ============================================================
+  # Phase 5: Present Classification
+  # ============================================================
+
+  # Step 14: Present classification to user
+  - id: "present-classification"
+    type: "agent"
+    prompt: |
+      Present the Risk Decision Tree classification result to the user.
+
+      Show:
+      1. The risk level (LOW/MEDIUM/HIGH) prominently
+      2. Which tree branch was triggered and why
+      3. Approval requirements for normal, soft freeze, and hard freeze periods
+      4. Change type guidance (especially if Standard Change is restricted)
+      5. Key deadlines (Friday 6PM PST, Thursday 2PM PST CAB)
+
+      Risk Classification: {{risk_classification}}
+    output: "presented_result"
+
+  # ============================================================
+  # Phase 6: Reflection
+  # ============================================================
+
+  # Step 15: Reflection
+  - id: "reflect"
+    type: "agent"
+    prompt: |
+      Store discovery for category "CAB_risk-classification":
+      - Risk level classified and which tree branch triggered
+      - Ground Stop app detected? Which system?
+      - Shared service detected? Which service?
+      - Blast radius assessment
+      - Mirror testing status
+      - Whether context was pre-provided or fetched fresh
+      - Data gaps that affected classification confidence
+
+      Risk Classification: {{risk_classification}}
+      ADO Context: {{ado_context}}
+      Code Changes: {{code_changes}}
+    output: "reflection"
